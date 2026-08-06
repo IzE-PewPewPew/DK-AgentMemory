@@ -34,3 +34,19 @@ venv/
 
 # Working notes, per the build plan's instruction to park out-of-scope findings
 NOTES.md
+
+# Agent tooling scratch directories.
+#
+# Some AI coding tools write session state into the project directory under a
+# UUID name. One of those — a claude-mem SQLite database and its export — was
+# swept into this repository by a `git add -A` and pushed publicly before being
+# caught. It contained conversation history from unrelated work.
+#
+# These patterns exist so that cannot recur. Anything matching them is scratch
+# belonging to a tool, never to this project.
+[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-*/
+scratchpad/
+claude-mem-*
+.claude/
+.aider*
+.cursor/
