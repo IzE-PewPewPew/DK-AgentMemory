@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/IzE-PewPewPew/DK-AgentMemory/internal/client"
 	"github.com/IzE-PewPewPew/DK-AgentMemory/internal/importers"
@@ -145,8 +147,16 @@ func cmdExport(ctx context.Context, args []string) int {
 	scope := fs.String("scope", "me", "me or team")
 	project := fs.String("project", "", "restrict to one project")
 	outPath := fs.String("o", "", "write to a file instead of stdout")
+	format := fs.String("format", "ndjson", "ndjson for machines, md for people")
+	outDir := fs.String("out", "", "directory for --format md; one file per project")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+
+	switch *format {
+	case "ndjson", "md", "markdown":
+	default:
+		return fail("--format must be ndjson or md")
 	}
 
 	c, err := newClient()
@@ -154,26 +164,119 @@ func cmdExport(ctx context.Context, args []string) int {
 		return failErr(err)
 	}
 
-	w := Out
-	if *outPath != "" {
-		f, err := os.Create(*outPath)
-		if err != nil {
-			return fail("%v", err)
+	if *format == "ndjson" {
+		w := Out
+		if *outPath != "" {
+			f, err := os.Create(*outPath)
+			if err != nil {
+				return fail("%v", err)
+			}
+			defer f.Close()
+			w = f
 		}
-		defer f.Close()
-		w = f
+
+		// Streamed straight through. A real corpus does not fit comfortably in
+		// memory on either end, and buffering it would also mean nothing is
+		// written until everything is read.
+		n, err := c.Export(ctx, *scope, *project, w)
+		if err != nil {
+			return failErr(err)
+		}
+		if *outPath != "" {
+			fmt.Fprintf(Err, "Wrote %s (%d bytes).\n", *outPath, n)
+		}
+		return 0
 	}
 
-	// Streamed straight through. A real corpus does not fit comfortably in
-	// memory on either end, and buffering it would also mean nothing is written
-	// until everything is read.
-	n, err := c.Export(ctx, *scope, *project, w)
-	if err != nil {
+	// Markdown is rendered client-side from the same NDJSON stream. The server
+	// keeps one export format; presentation belongs here, where it can change
+	// without a redeploy.
+	//
+	// This one does buffer, because grouping by project and ordering by kind
+	// cannot be done in a single forward pass. Markdown export is for reading,
+	// and a corpus too large to hold in memory is also too large to read.
+	var buf bytes.Buffer
+	if _, err := c.Export(ctx, *scope, *project, &buf); err != nil {
 		return failErr(err)
 	}
-	if *outPath != "" {
-		fmt.Fprintf(Err, "Wrote %s (%d bytes).\n", *outPath, n)
+
+	byProject := map[string][]mdRecord{}
+	total, malformed := 0, 0
+
+	sc := bufio.NewScanner(&buf)
+	sc.Buffer(make([]byte, 0, 256<<10), 16<<20)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var rec mdRecord
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			malformed++
+			continue
+		}
+		if rec.Type != "" && rec.Type != "memory" {
+			continue
+		}
+		byProject[rec.Project] = append(byProject[rec.Project], rec)
+		total++
 	}
+	if err := sc.Err(); err != nil {
+		return fail("reading the export stream: %v", err)
+	}
+
+	if total == 0 {
+		fmt.Fprintln(Err, "Nothing to export.")
+		return 0
+	}
+
+	now := time.Now()
+
+	// A single file when the destination is one, a directory otherwise.
+	if *outDir == "" {
+		w := Out
+		if *outPath != "" {
+			f, err := os.Create(*outPath)
+			if err != nil {
+				return fail("%v", err)
+			}
+			defer f.Close()
+			w = f
+		}
+		projects := make([]string, 0, len(byProject))
+		for p := range byProject {
+			projects = append(projects, p)
+		}
+		sort.Strings(projects)
+		for i, p := range projects {
+			if i > 0 {
+				fmt.Fprintln(w)
+			}
+			fmt.Fprint(w, renderMarkdown(p, byProject[p], now))
+		}
+		if *outPath != "" {
+			fmt.Fprintf(Err, "Wrote %s — %d memor%s across %d project%s.\n",
+				*outPath, total, map[bool]string{true: "y", false: "ies"}[total == 1],
+				len(projects), plural(len(projects)))
+		}
+		return 0
+	}
+
+	written, err := writeMarkdownExport(*outDir, byProject, now)
+	if err != nil {
+		return fail("%v", err)
+	}
+
+	fmt.Fprintf(Out, "Exported %d memor%s across %d project%s to %s\n\n",
+		total, map[bool]string{true: "y", false: "ies"}[total == 1],
+		len(byProject), plural(len(byProject)), *outDir)
+	for _, p := range written {
+		fmt.Fprintf(Out, "  %s\n", p)
+	}
+	if malformed > 0 {
+		fmt.Fprintf(Err, "\n%d malformed line%s skipped.\n", malformed, plural(malformed))
+	}
+	fmt.Fprintf(Out, "\nRe-import any of these with:\n  dkm import markdown %s --apply\n", *outDir)
 	return 0
 }
 

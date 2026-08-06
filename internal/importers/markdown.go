@@ -86,12 +86,34 @@ func ScanMarkdown(paths []string, project string, visibility string) (*MarkdownP
 		}
 
 		for _, sec := range splitSections(string(data)) {
-			if strings.TrimSpace(sec.Body) == "" {
+			// The banner an export writes under the document's H1 — counts, a
+			// date, a horizontal rule. Skipped explicitly rather than by
+			// guessing from its shape, because "looks like a header" is not a
+			// property anything should depend on.
+			if exportHeaderRE.MatchString(sec.Body) {
+				continue
+			}
+
+			// Metadata written by `dkm export --format md` is read back before
+			// the comment is stripped, so a round trip preserves kind,
+			// visibility, and file associations rather than re-deriving them
+			// from the filename.
+			meta := parseDKMMeta(sec.Body)
+			body := strings.TrimSpace(stripHTMLComments(sec.Body))
+
+			// Empty after stripping means the section held nothing but a
+			// comment — the export header, for instance. Importing that would
+			// create a memory titled after the project containing nothing.
+			if body == "" {
 				continue
 			}
 
 			title := sec.Title
-			if kind == store.KindDecision {
+			sectionKind := kind
+			if k := meta["kind"]; store.ValidKind(k) {
+				sectionKind = k
+			}
+			if sectionKind == store.KindDecision {
 				if m := adrTitleRE.FindStringSubmatch(title); m != nil && m[1] != "" {
 					title = m[1]
 				}
@@ -100,24 +122,99 @@ func ScanMarkdown(paths []string, project string, visibility string) (*MarkdownP
 				title = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 			}
 
-			for _, hit := range redact.Scan(sec.Body) {
+			sectionVisibility := visibility
+			if v := meta["visibility"]; store.ValidVisibility(v) {
+				sectionVisibility = v
+			}
+
+			// A memory that named source files keeps naming them. Falling back
+			// to the containing document is right for hand-written notes, and
+			// wrong for a re-import, where it would replace real file
+			// associations with the path of the export.
+			files := []string{filepath.ToSlash(path)}
+			if raw := meta["files"]; raw != "" {
+				files = nil
+				for _, f := range strings.Split(raw, ",") {
+					if f = strings.TrimSpace(f); f != "" {
+						files = append(files, f)
+					}
+				}
+			}
+
+			for _, hit := range redact.Scan(body) {
 				out.Secrets = append(out.Secrets, SecretHit{File: path, Line: sec.Line + hit.Line - 1, Kind: hit.Kind})
 				out.SecretCounts[hit.Kind]++
 			}
 
 			out.Memories = append(out.Memories, store.MemoryInput{
-				Kind:       kind,
+				Kind:       sectionKind,
 				Title:      collapse(title, 200),
-				Body:       strings.TrimSpace(sec.Body),
+				Body:       body,
 				Project:    project,
-				Files:      []string{filepath.ToSlash(path)},
-				Visibility: visibility,
+				Files:      files,
+				Visibility: sectionVisibility,
 				Source:     store.SourceImport,
 			})
 		}
 	}
 
 	return out, nil
+}
+
+var (
+	htmlCommentRE  = regexp.MustCompile(`(?s)<!--.*?-->`)
+	dkmMetaRE      = regexp.MustCompile(`(?s)<!--\s*dkm\s(.*?)-->`)
+	exportHeaderRE = regexp.MustCompile(`<!--\s*dkm-export\b`)
+	fenceRE        = regexp.MustCompile("^\\s*(```|~~~)")
+)
+
+// fencedLines marks which lines sit inside a fenced code block.
+//
+// Without this, a shell comment in an example — `# restart the service` — is
+// indistinguishable from an H1, and a document that merely documents a command
+// splits itself into extra memories on import. The heading scan below consults
+// this for every line rather than pattern-matching harder.
+func fencedLines(lines []string) []bool {
+	out := make([]bool, len(lines))
+	inFence := false
+	for i, line := range lines {
+		if fenceRE.MatchString(line) {
+			inFence = !inFence
+			out[i] = true // the fence marker itself is never a heading
+			continue
+		}
+		out[i] = inFence
+	}
+	return out
+}
+
+// parseDKMMeta reads the metadata block that `dkm export --format md` writes.
+//
+// One `key=value` per line, so a value may contain spaces and commas without
+// any quoting rules for the two sides to disagree about. Unknown keys are
+// ignored rather than rejected: a document written by a newer version should
+// still import into an older one, minus the fields it does not understand.
+func parseDKMMeta(body string) map[string]string {
+	m := dkmMetaRE.FindStringSubmatch(body)
+	if m == nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(m[1], "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		if key = strings.TrimSpace(key); key != "" {
+			out[key] = strings.TrimSpace(value)
+		}
+	}
+	return out
+}
+
+// stripHTMLComments removes comments so they do not become memory bodies.
+func stripHTMLComments(s string) string {
+	return htmlCommentRE.ReplaceAllString(s, "")
 }
 
 type section struct {
@@ -133,13 +230,23 @@ type section struct {
 // because it has no #.
 func splitSections(doc string) []section {
 	lines := strings.Split(doc, "\n")
+	fenced := fencedLines(lines)
+
+	// heading returns the level of a real heading on line i, or 0.
+	heading := func(i int) int {
+		if fenced[i] {
+			return 0
+		}
+		if m := headingRE.FindStringSubmatch(lines[i]); m != nil {
+			return len(m[1])
+		}
+		return 0
+	}
 
 	minLevel := 7
-	for _, line := range lines {
-		if m := headingRE.FindStringSubmatch(line); m != nil {
-			if lvl := len(m[1]); lvl < minLevel {
-				minLevel = lvl
-			}
+	for i := range lines {
+		if lvl := heading(i); lvl > 0 && lvl < minLevel {
+			minLevel = lvl
 		}
 	}
 	if minLevel == 7 {
@@ -159,12 +266,10 @@ func splitSections(doc string) []section {
 	// Split one level below the top when there is one, so a document with a
 	// single H1 and many H2s yields one memory per H2 rather than one in total.
 	splitLevel := minLevel
-	for _, line := range lines {
-		if m := headingRE.FindStringSubmatch(line); m != nil {
-			if lvl := len(m[1]); lvl == minLevel+1 {
-				splitLevel = minLevel + 1
-				break
-			}
+	for i := range lines {
+		if heading(i) == minLevel+1 {
+			splitLevel = minLevel + 1
+			break
 		}
 	}
 
@@ -183,8 +288,9 @@ func splitSections(doc string) []section {
 	}
 
 	for i, line := range lines {
-		if m := headingRE.FindStringSubmatch(line); m != nil && len(m[1]) <= splitLevel {
+		if lvl := heading(i); lvl > 0 && lvl <= splitLevel {
 			flush()
+			m := headingRE.FindStringSubmatch(line)
 			cur = &section{Title: strings.TrimSpace(m[2]), Line: i + 1}
 			continue
 		}

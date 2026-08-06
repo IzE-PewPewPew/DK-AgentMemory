@@ -99,6 +99,21 @@ dkm feed                  # what the team shared
 dkm import claude-code    # pull in existing transcripts
 ```
 
+### Memories as Markdown
+
+Read, edit, and re-import your corpus as ordinary Markdown — one file per
+project, lessons first:
+
+```bash
+dkm export --format md --out ./memories   # a directory, with an index
+dkm export --format md -o all.md          # or one document
+dkm import markdown ./memories --apply    # and back again
+```
+
+The round trip preserves kind, visibility, and file associations: structured
+fields ride in an HTML comment, invisible in any renderer. Editing a lesson in
+your editor and importing it back does not turn it into an untyped fact.
+
 Inside an agent, use natural language or the bundled skills — `/recall`, `/remember`, `/lessons`.
 
 ## Requirements

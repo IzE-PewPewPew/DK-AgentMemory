@@ -151,6 +151,12 @@ POST /v1/import/preview                  dry run: counts, grouping, secret repor
 
 Streaming NDJSON in both directions. No body-size ceiling, no whole-corpus buffering.
 
+`dkm export --format md` renders Markdown **client-side** from this same NDJSON
+stream. The server keeps one export format; presentation belongs in the client,
+where it can change without a redeploy. That path does buffer, because grouping
+by project and ordering by kind cannot be done in one forward pass — acceptable,
+because a corpus too large to hold in memory is also too large to read.
+
 Agent transcripts are parsed **client-side** by `dkm import claude-code` and
 `dkm import codex`, which then post sessions and batched observations through
 the ordinary endpoints. Parsing them on the server would mean uploading raw
