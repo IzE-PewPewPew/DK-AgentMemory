@@ -221,14 +221,19 @@ func (c *Client) Save() error {
 		return fmt.Errorf("creating temporary file in %s: %w", dir, err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	// Cleanup on every path that does not rename. A leftover .config-*.yaml in
+	// ~/.dkm would contain an API key.
+	defer func() { _ = os.Remove(tmpName) }()
 
 	if err := tmp.Chmod(0o600); err != nil && runtime.GOOS != "windows" {
-		tmp.Close()
+		// The close error is deliberately dropped: the Chmod failure is the one
+		// worth reporting, and the deferred Remove above deletes the file
+		// either way.
+		_ = tmp.Close()
 		return fmt.Errorf("securing %s: %w", tmpName, err)
 	}
 	if _, err := tmp.Write(body); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("writing %s: %w", tmpName, err)
 	}
 	if err := tmp.Close(); err != nil {

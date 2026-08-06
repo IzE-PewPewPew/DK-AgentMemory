@@ -347,7 +347,10 @@ func flushBuffer(ctx context.Context, c *client.Client, p *hookPayload, force bo
 			items = append(items, obs)
 		}
 	}
-	f.Close()
+	// Closed explicitly rather than deferred: the file is removed further down
+	// once its contents have been accepted, and on Windows a removal cannot
+	// happen while a handle is open.
+	_ = f.Close()
 
 	if len(items) == 0 || (!force && len(items) < hookFlushAt) {
 		return
@@ -428,23 +431,19 @@ func emitContext(event, text string) {
 // terminal in the middle of their work.
 func hookLog(format string, a ...any) {
 	path := filepath.Join(config.Home(), "hooks.log")
+
+	// Size-check before opening. Rotating an already-open handle means closing
+	// and reopening inside the same function, which is how the earlier version
+	// of this ended up closing one file twice.
+	if fi, err := os.Stat(path); err == nil && fi.Size() > 1<<20 {
+		_ = os.Remove(path)
+	}
+
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-
-	// Truncate a runaway log rather than growing without bound; this file is
-	// written from a hook that fires on every prompt.
-	if fi, err := f.Stat(); err == nil && fi.Size() > 1<<20 {
-		f.Close()
-		_ = os.Remove(path)
-		f, err = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-		if err != nil {
-			return
-		}
-		defer f.Close()
-	}
 
 	fmt.Fprintf(f, "%s %s\n", time.Now().UTC().Format(time.RFC3339), fmt.Sprintf(format, a...))
 }

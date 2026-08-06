@@ -71,7 +71,10 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) error {
 	w.WriteHeader(http.StatusOK)
 
 	bw := bufio.NewWriterSize(w, 64<<10)
-	defer bw.Flush()
+	// The status line has already been sent, so a failed flush cannot become an
+	// error response. The client sees a short stream; nothing else is possible
+	// at this point.
+	defer func() { _ = bw.Flush() }()
 	enc := json.NewEncoder(bw)
 
 	flusher, _ := w.(http.Flusher)

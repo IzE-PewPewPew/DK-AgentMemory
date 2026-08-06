@@ -440,7 +440,7 @@ func (s *Store) Lessons(ctx context.Context, id Identity, project string, limit 
 	return scanMemories(rows)
 }
 
-// Projects lists the distinct projects visible to the caller with counts.
+// ProjectSummary is one project with its memory and session counts.
 type ProjectSummary struct {
 	Project  string    `json:"project"`
 	Memories int64     `json:"memories"`

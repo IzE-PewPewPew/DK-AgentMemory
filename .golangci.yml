@@ -1,0 +1,54 @@
+version: "2"
+
+# Linter configuration.
+#
+# Every exclusion below is a deliberate decision with a reason, not a way to
+# make the build green. A suppression without a reason is how a linter becomes
+# decoration.
+
+linters:
+  default: standard
+
+  settings:
+    errcheck:
+      # Writing to stdout or stderr is the last thing these functions do before
+      # returning to the user. There is no recovery: if stdout is broken, the
+      # error report about stdout being broken cannot be printed either. Go's
+      # own standard library ignores these returns for the same reason.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fscanln
+        - (*text/tabwriter.Writer).Flush
+
+    staticcheck:
+      checks:
+        - all
+        # ST1005 forbids capitalised errors and trailing punctuation. That rule
+        # exists because Go errors get wrapped into sentences. Many errors here
+        # are not wrapped — they are multi-line instructions printed straight to
+        # a terminal, naming a config key, a file, and the command that fixes
+        # it. Stripping the punctuation out of a three-line instruction makes it
+        # harder to read, and lowercasing "Postgres" is simply wrong.
+        - "-ST1005"
+
+  exclusions:
+    rules:
+      # Test fixtures deliberately contain credential-shaped strings and ignore
+      # errors on setup calls; that is what makes them fixtures.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+      # Closing a file opened for reading, after the read has completed, cannot
+      # tell you anything you can act on. Closes on the *write* path are checked
+      # everywhere in this codebase, because there the error means the data did
+      # not land.
+      - source: "defer .*\\.Close\\(\\)"
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

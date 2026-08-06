@@ -154,7 +154,7 @@ func cmdExport(ctx context.Context, args []string) int {
 		return failErr(err)
 	}
 
-	var w io.Writer = Out
+	w := Out
 	if *outPath != "" {
 		f, err := os.Create(*outPath)
 		if err != nil {

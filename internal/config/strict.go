@@ -58,7 +58,7 @@ func checkUnknownKeys(node *yaml.Node, typ reflect.Type, path string, out *[]Unk
 		}
 		return
 	}
-	for typ.Kind() == reflect.Ptr {
+	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
 	}
 
@@ -125,7 +125,7 @@ func yamlFields(typ reflect.Type) map[string]reflect.StructField {
 		}
 		if f.Anonymous && (name == "" || strings.Contains(opts, "inline")) {
 			t := f.Type
-			for t.Kind() == reflect.Ptr {
+			for t.Kind() == reflect.Pointer {
 				t = t.Elem()
 			}
 			if t.Kind() == reflect.Struct {

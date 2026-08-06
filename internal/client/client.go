@@ -1,3 +1,10 @@
+// Package client is the human- and agent-facing half of dkm: an HTTP client for
+// the server, project identity resolution, and the offline mirror behind both.
+//
+// Every read falls back to the local mirror when the server is unreachable and
+// every write falls back to a queue, so losing the network degrades what the
+// tool knows rather than whether it works. Callers are always told which
+// happened — a stale answer presented as a fresh one is worse than an error.
 package client
 
 import (
@@ -251,7 +258,10 @@ func (c *Client) Health(ctx context.Context) (*Health, error) {
 
 // --- memories --------------------------------------------------------------
 
-// Save stores a memory, queueing it locally when the server is unreachable.
+// SaveResult reports where a memory ended up.
+//
+// Queued means the server was unreachable and the write is waiting locally; the
+// ID is already final, so the eventual flush cannot produce a second row.
 type SaveResult struct {
 	Memory  *store.Memory
 	Queued  bool

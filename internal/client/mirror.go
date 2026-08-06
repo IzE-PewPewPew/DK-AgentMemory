@@ -264,9 +264,20 @@ func (m *Mirror) Search(query, project string, limit int) ([]store.SearchResult,
 	return scored, nil
 }
 
+// isTokenRune reports whether a character belongs inside a search token.
+//
+// Dots and slashes are included so `src/auth.ts` and `pprp-wallet-api` survive
+// as single tokens. Splitting on them would turn the identifiers people
+// actually search for into fragments that match everything.
+func isTokenRune(r rune) bool {
+	return r >= 'a' && r <= 'z' ||
+		r >= '0' && r <= '9' ||
+		r == '-' || r == '_' || r == '.' || r == '/'
+}
+
 func tokenise(s string) []string {
 	fields := strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' || r == '/')
+		return !isTokenRune(r)
 	})
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
@@ -458,19 +469,24 @@ func writeAtomic(path string, fn func(*bufio.Writer) error) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	// Removed on every path that does not reach the rename below, so a failed
+	// write leaves the previous file intact and no debris beside it.
+	defer func() { _ = os.Remove(tmpName) }()
 
 	bw := bufio.NewWriterSize(tmp, 64<<10)
 	if err := fn(bw); err != nil {
-		tmp.Close()
+		// The close error is dropped in each of these: the failure already in
+		// hand is the one worth reporting, and the deferred Remove cleans up
+		// regardless of how the close went.
+		_ = tmp.Close()
 		return err
 	}
 	if err := bw.Flush(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {

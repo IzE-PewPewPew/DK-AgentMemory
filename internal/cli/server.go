@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/IzE-PewPewPew/DK-AgentMemory/internal/api"
@@ -179,16 +178,4 @@ func cmdMigrate(ctx context.Context, args []string) int {
 	}
 	fmt.Fprintf(Out, "\nSchema is now at version %d.\n", res.Current)
 	return 0
-}
-
-// resolveConfigPath is used by admin commands that may run either against a
-// local config or against a remote server.
-func resolveConfigPath(explicit string) string {
-	if explicit != "" {
-		return explicit
-	}
-	if p := os.Getenv("DKM_CONFIG"); p != "" {
-		return p
-	}
-	return config.DefaultConfigPath()
 }

@@ -20,7 +20,13 @@ id = "internal-hostname"
 description = "Internal hostname that should not reach a public repository"
 # Real infrastructure names leak topology and give an attacker a target list.
 # The docs use example.com throughout for exactly this reason.
-regex = '''(?i)\b[a-z0-9\-]+\.(?:internal|local|lan|corp|intranet)\b'''
+#
+# Deliberately case-sensitive, and deliberately not matching `.local` or `.lan`.
+# The first version of this rule was case-insensitive and matched every
+# `.Local()` call in the codebase — five findings, none of them a hostname. A
+# scanner that cries wolf gets its failures ignored, which is strictly worse
+# than not having it.
+regex = '''\b[a-z0-9][a-z0-9\-]*\.(?:internal|corp|intranet)\b'''
 tags = ["hostname"]
 
 [allowlist]

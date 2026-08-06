@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
-	"github.com/IzE-PewPewPew/DK-AgentMemory/internal/ulid"
 )
 
 func unmarshalMap(b []byte, dst *map[string]any) error { return json.Unmarshal(b, dst) }
@@ -241,6 +239,3 @@ func (s *Store) ProjectsForGraph(ctx context.Context) ([][2]string, error) {
 	}
 	return out, rows.Err()
 }
-
-// newNodeID is used by importers that build nodes outside the SQL path.
-func newNodeID() string { return ulid.New() }
