@@ -1,0 +1,36 @@
+# Build output
+bin/
+dist/
+*.exe
+*.test
+
+# Secrets and local configuration. config.yaml is a server config that may hold
+# a connection string; .env holds a database password.
+.env
+config.yaml
+!config.example.yaml
+deploy/config.yaml
+
+# Backups written by `dkm connect` before it touches an agent config
+*.bak
+
+# Database dumps contain everything
+*.dump
+*.sql.gz
+
+# Client state: the API key, the local mirror, and any queued writes
+.dkm/
+
+# Python sidecar
+__pycache__/
+venv/
+.venv/
+*.pyc
+
+# Editors and platforms
+.DS_Store
+.idea/
+.vscode/
+
+# Working notes, per the build plan's instruction to park out-of-scope findings
+NOTES.md

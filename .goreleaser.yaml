@@ -1,0 +1,137 @@
+version: 2
+
+project_name: dkm
+
+before:
+  hooks:
+    - go mod tidy
+    - go vet ./...
+
+builds:
+  - id: dkm
+    main: ./cmd/dkm
+    binary: dkm
+    env:
+      # No cgo. The promise is one file that runs on a machine with no
+      # toolchain and no matching libc; cgo quietly takes that away.
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      # -trimpath keeps build machine paths out of the binary, so two people
+      # building the same tag get the same bytes.
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/IzE-PewPewPew/DK-AgentMemory/internal/version.Version={{.Version}}
+      - -X github.com/IzE-PewPewPew/DK-AgentMemory/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/IzE-PewPewPew/DK-AgentMemory/internal/version.Date={{.Date}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: dkm
+    name_template: "dkm_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+      - SECURITY.md
+      - config.example.yaml
+      - src: docs/**/*
+        dst: docs
+
+checksums:
+  name_template: "dkm_checksums.txt"
+  algorithm: sha256
+
+# Keyless signing through the release workflow's OIDC token. Nothing to store,
+# nothing to rotate, and no private key that can outlive the person holding it.
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^feat(\(.+\))?:'
+      order: 0
+    - title: Fixes
+      regexp: '^fix(\(.+\))?:'
+      order: 1
+    - title: Security
+      regexp: '^(sec|security)(\(.+\))?:'
+      order: 2
+    - title: Documentation
+      regexp: '^docs(\(.+\))?:'
+      order: 3
+    - title: Other
+      order: 99
+  filters:
+    exclude:
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+      - Merge pull request
+
+brews:
+  - name: dkm
+    repository:
+      owner: IzE-PewPewPew
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/IzE-PewPewPew/DK-AgentMemory
+    description: One shared memory for every AI coding tool your team uses
+    license: Apache-2.0
+    skip_upload: auto
+    test: |
+      system "#{bin}/dkm", "version"
+
+scoops:
+  - name: dkm
+    repository:
+      owner: IzE-PewPewPew
+      name: scoop-bucket
+      token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
+    homepage: https://github.com/IzE-PewPewPew/DK-AgentMemory
+    description: One shared memory for every AI coding tool your team uses
+    license: Apache-2.0
+    skip_upload: auto
+
+release:
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Verify
+
+    ```bash
+    sha256sum -c dkm_checksums.txt --ignore-missing
+
+    cosign verify-blob dkm_checksums.txt \
+      --certificate dkm_checksums.txt.pem \
+      --signature dkm_checksums.txt.sig \
+      --certificate-identity-regexp 'https://github\.com/IzE-PewPewPew/DK-AgentMemory/\.github/workflows/release\.yml@.*' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    ```
+
+    ## Container
+
+    ```bash
+    docker pull ghcr.io/ize-pewpewpew/dk-agentmemory:{{ .Tag }}
+    ```

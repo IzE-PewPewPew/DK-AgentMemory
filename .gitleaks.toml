@@ -1,0 +1,49 @@
+# gitleaks configuration.
+#
+# T1.3 requires that a planted credential fails CI, and T6.7 requires the whole
+# history to be clean before the repository goes public. Both use this file.
+#
+# The allowlist below is deliberately narrow. Every entry widens the hole this
+# tool exists to close, so each one names exactly what it permits and why.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "dkm-api-key"
+description = "DevKuong Memories API key"
+regex = '''pmk_[A-Za-z0-9]{4}_[A-Za-z0-9_\-]{16,}'''
+tags = ["key", "dkm"]
+
+[[rules]]
+id = "internal-hostname"
+description = "Internal hostname that should not reach a public repository"
+# Real infrastructure names leak topology and give an attacker a target list.
+# The docs use example.com throughout for exactly this reason.
+regex = '''(?i)\b[a-z0-9\-]+\.(?:internal|local|lan|corp|intranet)\b'''
+tags = ["hostname"]
+
+[allowlist]
+description = "Test fixtures and documentation placeholders"
+
+paths = [
+  # Redaction tests must contain credential-shaped strings; that is what they
+  # test. The values are structurally valid and cryptographically worthless.
+  '''internal/redact/redact_test\.go''',
+  '''internal/connect/writers_test\.go''',
+  '''\.gitleaks\.toml''',
+]
+
+regexes = [
+  # Documentation placeholders.
+  '''pmk_a3f2_x+''',
+  '''pmk_a3f2_notarealkey\d*''',
+  '''pmk_ci00_notarealkeyatall0''',
+  '''sk-ant-\.\.\.''',
+  '''AKIAIOSFODNN7EXAMPLE''',       # AWS's own documented example key
+  '''<admin-key>''',
+  '''your-server''',
+  # db.internal and similar appear only inside redaction test strings, which
+  # are already path-allowlisted; this covers doc examples that name them.
+  '''db\.internal''',
+]

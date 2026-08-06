@@ -1,0 +1,51 @@
+[Unit]
+Description=DevKuong Memories API
+Documentation=https://github.com/IzE-PewPewPew/DK-AgentMemory
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dkm
+Group=dkm
+WorkingDirectory=/opt/dkm
+
+# Secrets come from an environment file, not from the unit and not from the
+# config file. Mode 600, owned by root, readable by the service user.
+EnvironmentFile=-/etc/dkm/dkm.env
+
+ExecStart=/opt/dkm/bin/dkm serve --config /opt/dkm/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=on-failure
+RestartSec=5s
+# Do not restart-loop a server that fails on a config error: it will fail the
+# same way every time, and a tight loop buries the message that says why.
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# In-flight requests get time to finish, and SSE streams get closed rather than
+# severed.
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# Hardening. The process needs a network socket and its own directory; nothing
+# else on the host should be reachable from it.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/dkm /var/log/dkm
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

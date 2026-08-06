@@ -1,0 +1,85 @@
+# DevKuong Memories — server configuration.
+#
+# Copy to config.yaml and edit. Three keys are required; everything else has a
+# defensible default and can be deleted from this file entirely.
+#
+# The loader is strict: an unknown key is fatal and names the key and its line,
+# and a missing required key is fatal and names the key. The server will not
+# start half-configured, because a server that starts and quietly ignores a
+# setting is worse than one that refuses to.
+#
+# Environment variables override file values: DKM_ plus the path in capitals
+# with underscores. server.bind becomes DKM_SERVER_BIND.
+#
+# chmod 600 this file regardless of what is in it.
+
+server:
+  bind: 127.0.0.1:8090                        # REQUIRED. Keep it on loopback.
+  public_url: https://memories.example.com    # REQUIRED. How clients reach you.
+  viewer_enabled: true
+  viewer_path: /viewer
+  read_timeout: 30s
+  write_timeout: 60s
+  shutdown_grace: 15s
+
+database:
+  # REQUIRED.
+  url: postgres://dkm:CHANGE_ME@127.0.0.1:5432/dkm?sslmode=disable
+  max_conns: 20
+  # Prefer running `dkm migrate` explicitly. Migrating as a side effect of a
+  # restart means rolling the binary back leaves a schema it has never seen.
+  migrate_on_start: false
+
+embedding:
+  provider: local              # local | ollama | openai | voyage | none
+  endpoint: http://127.0.0.1:8091
+  model: BAAI/bge-small-en-v1.5
+  dimensions: 384              # must match the schema; changing it needs a re-embed
+  api_key_env: DKM_EMBED_API_KEY
+  batch_size: 32
+  timeout: 20s
+
+search:
+  default_limit: 8
+  rrf_k: 60                    # the constant from the Reciprocal Rank Fusion paper
+  candidate_limit: 50          # rows each retriever contributes before fusion
+  recency_half_life_days: 90
+  dedup_threshold: 0.92        # cosine similarity above which a fact is a duplicate
+
+consolidation:
+  enabled: true
+  session_summary_interval: 15m
+  fact_extraction_cron: "0 2 * * *"
+  lesson_synthesis_cron: "0 3 * * 0"
+  llm:
+    provider: anthropic        # anthropic | openai | google | openai-compatible
+    model: claude-haiku-4-5
+    api_key_env: DKM_LLM_API_KEY
+    base_url: ""               # required only for openai-compatible
+    max_tokens: 2000
+    timeout: 2m
+
+injection:
+  enabled: true
+  budget_tokens: 1500
+  include: [lessons, decisions, session_summaries]
+
+security:
+  require_https: true          # refuse bearer tokens over plaintext to non-loopback
+  rate_limit_writes_per_min: 100
+  rate_limit_reads_per_min: 300
+  redaction_enabled: true      # leave this on
+  audit_enabled: true
+
+retention:
+  observation_days: 90         # raw tier 0 only; distilled memories are kept
+  decay_enabled: true
+  decay_half_life_days: 180
+
+log:
+  level: info                  # debug | info | warn | error
+  format: json                 # json | text
+
+# Secrets never belong in this file. The *_api_key_env keys name an environment
+# variable to read the credential from, so this file can be committed to a
+# private config repository without becoming a credential store.

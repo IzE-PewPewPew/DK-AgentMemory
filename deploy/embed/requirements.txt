@@ -1,0 +1,7 @@
+# Pinned to minor versions. This sidecar runs unattended on someone else's
+# server; an unpinned dependency means a rebuild months from now can silently
+# change the embedding model's output, which invalidates every stored vector.
+fastapi>=0.115,<0.120
+uvicorn[standard]>=0.32,<0.40
+fastembed>=0.5,<0.8
+pydantic>=2.9,<3

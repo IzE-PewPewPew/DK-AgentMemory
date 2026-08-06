@@ -1,0 +1,96 @@
+# DevKuong Memories — full stack.
+#
+#   cp .env.example .env
+#   edit .env
+#   docker compose up -d
+#   docker compose logs dkm | grep -A2 'admin key'
+#
+# Only dkm publishes a port, and only on loopback. Put a tunnel or a reverse
+# proxy in front of it; nothing here should ever be reachable from the internet
+# directly.
+
+name: dkm
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dkm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-dkm}
+      # Checksums catch silent corruption on the cheap disks these run on.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # No ports section. Postgres is reachable only from the compose network,
+    # which is the difference between a database and an incident.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dkm} -d ${POSTGRES_DB:-dkm}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  embed:
+    build:
+      context: ./embed
+    image: ghcr.io/ize-pewpewpew/dk-agentmemory-embed:${DKM_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      EMBED_MODEL: ${EMBED_MODEL:-BAAI/bge-small-en-v1.5}
+    volumes:
+      # Persist the downloaded model so a restart is not a 400 MB download.
+      - embedcache:/home/embed/.cache
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=5).status==200 else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      # The model is downloaded and loaded on first boot, which takes a while on
+      # a small VPS. A short start period here would mark it unhealthy and
+      # restart it forever without ever finishing.
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  dkm:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        VERSION: ${DKM_VERSION:-dev}
+    image: ghcr.io/ize-pewpewpew/dk-agentmemory:${DKM_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      embed:
+        condition: service_started
+    environment:
+      DKM_DATABASE_URL: postgres://${POSTGRES_USER:-dkm}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-dkm}?sslmode=disable
+      DKM_SERVER_BIND: 0.0.0.0:8090
+      DKM_SERVER_PUBLIC_URL: ${DKM_PUBLIC_URL:?set DKM_PUBLIC_URL in .env}
+      DKM_EMBEDDING_ENDPOINT: http://embed:8091
+      DKM_DATABASE_MIGRATE_ON_START: "true"
+      DKM_CONSOLIDATION_ENABLED: ${DKM_CONSOLIDATION_ENABLED:-false}
+      DKM_CONSOLIDATION_LLM_PROVIDER: ${DKM_LLM_PROVIDER:-anthropic}
+      DKM_CONSOLIDATION_LLM_MODEL: ${DKM_LLM_MODEL:-claude-haiku-4-5}
+      DKM_LLM_API_KEY: ${DKM_LLM_API_KEY:-}
+      # Inside the compose network the hop to the proxy is not TLS. Terminate
+      # TLS at the tunnel or reverse proxy in front of 8090.
+      DKM_SECURITY_REQUIRE_HTTPS: "false"
+      DKM_LOG_FORMAT: json
+    # No config file is mounted. Everything above is a DKM_* override, and the
+    # server accepts an absent config file when the environment supplies the
+    # required keys — so there is no file here that could disagree with this.
+    ports:
+      # Loopback only. Verify after every deploy: `ss -tlnp | grep 8090` must
+      # show 127.0.0.1, not 0.0.0.0.
+      - "127.0.0.1:${DKM_PORT:-8090}:8090"
+
+volumes:
+  pgdata:
+  embedcache:

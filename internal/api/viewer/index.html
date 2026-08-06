@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>DevKuong Memories</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfa; --panel: #fff; --line: #e4e4e2; --ink: #1a1a19;
+    --muted: #6b6b66; --accent: #2f6f4e; --warn: #9a4b23;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --panel: #1d1f23; --line: #2e3138; --ink: #e8e8e6;
+      --muted: #9a9a94; --accent: #7fc39b; --warn: #e0a06a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+    position: sticky; top: 0; z-index: 5;
+  }
+  h1 { font-size: 15px; margin: 0; font-weight: 620; letter-spacing: -0.01em; }
+  .ro {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px;
+  }
+  .spacer { flex: 1 }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.live { background: var(--accent); }
+  .dot.down { background: var(--warn); }
+  main { max-width: 1080px; margin: 0 auto; padding: 20px; }
+  nav { display: flex; gap: 4px; margin-bottom: 16px; flex-wrap: wrap; }
+  button {
+    font: inherit; color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 7px; padding: 6px 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  input {
+    font: inherit; color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 7px; padding: 7px 11px; min-width: 240px;
+  }
+  input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 13px 15px; margin-bottom: 9px;
+  }
+  .card h3 { margin: 0 0 5px; font-size: 14.5px; font-weight: 600; }
+  .card p { margin: 0; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .meta { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 9px; font-size: 12px; color: var(--muted); }
+  .tag { border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; font-family: var(--mono); font-size: 11.5px; }
+  .tag.lesson { border-color: var(--accent); color: var(--accent); }
+  .tag.team { border-color: var(--accent); }
+  .empty { color: var(--muted); padding: 32px 0; text-align: center; }
+  .err { color: var(--warn); border: 1px solid var(--warn); border-radius: 8px; padding: 11px 14px; margin-bottom: 14px; }
+  .stats { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 16px; font-size: 13px; color: var(--muted); }
+  .stats b { color: var(--ink); font-weight: 600; }
+  code { font-family: var(--mono); font-size: 12.5px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; }
+  .scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>DevKuong Memories</h1>
+  <span class="ro">read only</span>
+  <span class="spacer"></span>
+  <span id="live"><span class="dot" id="dot"></span> <span id="livetext">connecting</span></span>
+</header>
+
+<main>
+  <div id="gate" hidden>
+    <div class="card">
+      <h3>API key</h3>
+      <p>The viewer calls the same API as every other client. Paste a key issued with
+         <code>dkm admin key issue</code>. It is kept in this tab only and cleared when the tab closes.</p>
+      <div class="row" style="margin-top:12px">
+        <input id="key" type="password" placeholder="pmk_…" autocomplete="off" spellcheck="false">
+        <button id="connect">Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="app" hidden>
+    <nav>
+      <button data-tab="memories" aria-selected="true">Memories</button>
+      <button data-tab="lessons">Lessons</button>
+      <button data-tab="sessions">Sessions</button>
+      <button data-tab="projects">Projects</button>
+      <button data-tab="search">Search</button>
+    </nav>
+
+    <div id="error" class="err" hidden></div>
+    <div id="stats" class="stats"></div>
+
+    <div class="row" id="searchrow" hidden>
+      <input id="q" placeholder="hybrid search — try a paraphrase, not just keywords">
+      <button id="go">Search</button>
+    </div>
+
+    <div id="list"></div>
+  </div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  // The API is same-origin: the viewer is mounted under the API's own host, so
+  // there is no CORS to configure and no second certificate to renew.
+  var base = location.pathname.replace(/\/viewer\/?$/, "") || "";
+  var key = sessionStorage.getItem("dkm_key") || "";
+  var tab = "memories";
+  var es = null;
+
+  var el = function (id) { return document.getElementById(id); };
+  var esc = function (s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  };
+
+  function api(path, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign({ "Authorization": "Bearer " + key }, opts.headers || {});
+    return fetch(base + path, opts).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (body) {
+        if (!r.ok) {
+          var msg = body.message || r.statusText;
+          if (body.hint) msg += " — " + body.hint;
+          throw new Error(msg);
+        }
+        return body;
+      });
+    });
+  }
+
+  function showError(e) {
+    var box = el("error");
+    if (!e) { box.hidden = true; return; }
+    box.hidden = false;
+    box.textContent = e.message || String(e);
+  }
+
+  function ago(iso) {
+    var s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 90) return Math.round(s) + "s ago";
+    if (s < 5400) return Math.round(s / 60) + "m ago";
+    if (s < 172800) return Math.round(s / 3600) + "h ago";
+    return Math.round(s / 86400) + "d ago";
+  }
+
+  function memoryCard(m) {
+    var tags = '<span class="tag ' + esc(m.kind) + '">' + esc(m.kind) + "</span>";
+    if (m.visibility === "team") tags += '<span class="tag team">team</span>';
+    if (m.project) tags += "<span class=\"tag\">" + esc(m.project) + "</span>";
+    if (m.redacted) tags += '<span class="tag">redacted</span>';
+    if (typeof m.score === "number") tags += "<span class=\"tag\">score " + m.score.toFixed(4) + "</span>";
+    if (m.bm25_rank) tags += "<span class=\"tag\">bm25 #" + m.bm25_rank + "</span>";
+    if (m.vector_rank) tags += "<span class=\"tag\">vec #" + m.vector_rank + "</span>";
+    (m.files || []).slice(0, 4).forEach(function (f) {
+      tags += "<span class=\"tag\">" + esc(f) + "</span>";
+    });
+
+    var body = m.body && m.body !== m.title ? "<p>" + esc(m.body) + "</p>" : "";
+    return '<div class="card"><h3>' + esc(m.title) + "</h3>" + body +
+      '<div class="meta">' + tags +
+      "<span>strength " + (m.strength || 0).toFixed(2) + "</span>" +
+      "<span>" + esc(ago(m.updated_at || m.created_at)) + "</span>" +
+      "</div></div>";
+  }
+
+  function render(html) {
+    el("list").innerHTML = html || '<div class="empty">Nothing here yet.</div>';
+  }
+
+  function loadStats() {
+    api("/v1/healthz").then(function (h) {
+      var s = h.stats || {};
+      el("stats").innerHTML =
+        "<span><b>" + (s.memories || 0) + "</b> memories</span>" +
+        "<span><b>" + (s.sessions || 0) + "</b> sessions</span>" +
+        "<span><b>" + (s.observations || 0) + "</b> observations</span>" +
+        "<span><b>" + (s.memories_embedded || 0) + "</b> embedded</span>" +
+        "<span>embedder: <b>" + esc((h.embedder && (h.embedder.detail || (h.embedder.ok ? "ok" : "down"))) || "?") + "</b></span>" +
+        "<span>v<b>" + esc(h.version || "?") + "</b></span>";
+    }).catch(function () { el("stats").textContent = ""; });
+  }
+
+  var views = {
+    memories: function () {
+      return api("/v1/memories?limit=50").then(function (d) {
+        render((d.memories || []).map(memoryCard).join(""));
+      });
+    },
+    lessons: function () {
+      return api("/v1/lessons?limit=100").then(function (d) {
+        render((d.lessons || []).map(memoryCard).join(""));
+      });
+    },
+    sessions: function () {
+      return api("/v1/sessions?limit=50").then(function (d) {
+        var rows = (d.sessions || []).map(function (s) {
+          return "<tr><td><code>" + esc(s.agent || "—") + "</code></td><td>" + esc(s.project || "—") +
+            "</td><td>" + esc(ago(s.started_at)) + "</td><td>" + (s.ended_at ? "closed" : "open") +
+            "</td><td>" + esc(s.summary || "") + "</td></tr>";
+        }).join("");
+        render(rows
+          ? '<div class="card scroll"><table><thead><tr><th>Agent</th><th>Project</th><th>Started</th><th>State</th><th>Summary</th></tr></thead><tbody>' + rows + "</tbody></table></div>"
+          : "");
+      });
+    },
+    projects: function () {
+      return api("/v1/projects").then(function (d) {
+        var rows = (d.projects || []).map(function (p) {
+          return "<tr><td><code>" + esc(p.project || "(none)") + "</code></td><td>" + p.memories +
+            "</td><td>" + p.sessions + "</td><td>" + esc(ago(p.last_seen)) + "</td></tr>";
+        }).join("");
+        render(rows
+          ? '<div class="card scroll"><table><thead><tr><th>Project</th><th>Memories</th><th>Sessions</th><th>Last activity</th></tr></thead><tbody>' + rows + "</tbody></table></div>"
+          : "");
+      });
+    },
+    search: function () {
+      var q = el("q").value.trim();
+      if (!q) { render('<div class="empty">Enter a query.</div>'); return Promise.resolve(); }
+      return api("/v1/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: q, limit: 20 })
+      }).then(function (d) {
+        var head = '<div class="stats"><span>mode <b>' + esc(d.mode) + "</b></span><span><b>" +
+          (d.count || 0) + "</b> results</span></div>";
+        render(head + (d.results || []).map(memoryCard).join(""));
+      });
+    }
+  };
+
+  function show(name) {
+    tab = name;
+    Array.prototype.forEach.call(document.querySelectorAll("nav button"), function (b) {
+      b.setAttribute("aria-selected", String(b.dataset.tab === name));
+    });
+    el("searchrow").hidden = name !== "search";
+    showError(null);
+    render("");
+    views[name]().catch(showError);
+  }
+
+  function connectEvents() {
+    if (es) es.close();
+    // EventSource cannot set an Authorization header, so the stream is opened
+    // by a fetch that reads the body incrementally. Same endpoint, same auth.
+    var ctrl = new AbortController();
+    fetch(base + "/v1/events", {
+      headers: { "Authorization": "Bearer " + key },
+      signal: ctrl.signal
+    }).then(function (r) {
+      if (!r.ok || !r.body) throw new Error("event stream unavailable");
+      el("dot").className = "dot live";
+      el("livetext").textContent = "live";
+
+      var reader = r.body.getReader(), dec = new TextDecoder(), buf = "";
+      function pump() {
+        return reader.read().then(function (res) {
+          if (res.done) throw new Error("stream ended");
+          buf += dec.decode(res.value, { stream: true });
+          var parts = buf.split("\n\n");
+          buf = parts.pop();
+          parts.forEach(function (frame) {
+            if (frame.indexOf("event:") === -1) return;
+            // Any change refreshes the current view. The payload is not trusted
+            // to patch the DOM; it only signals that a refetch is worthwhile.
+            if (views[tab]) views[tab]().catch(function () {});
+            loadStats();
+          });
+          return pump();
+        });
+      }
+      return pump();
+    }).catch(function () {
+      el("dot").className = "dot down";
+      el("livetext").textContent = "reconnecting";
+      setTimeout(connectEvents, 4000);
+    });
+    es = { close: function () { ctrl.abort(); } };
+  }
+
+  function start() {
+    el("gate").hidden = true;
+    el("app").hidden = false;
+    loadStats();
+    show("memories");
+    connectEvents();
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll("nav button"), function (b) {
+    b.addEventListener("click", function () { show(b.dataset.tab); });
+  });
+  el("go").addEventListener("click", function () { show("search"); });
+  el("q").addEventListener("keydown", function (e) { if (e.key === "Enter") show("search"); });
+
+  el("connect").addEventListener("click", function () {
+    key = el("key").value.trim();
+    if (!key) return;
+    api("/v1/healthz").then(function () {
+      sessionStorage.setItem("dkm_key", key);
+      start();
+    }).catch(function (e) {
+      el("gate").hidden = false;
+      el("app").hidden = true;
+      alert(e.message);
+    });
+  });
+  el("key").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") el("connect").click();
+  });
+
+  if (key) {
+    api("/v1/healthz").then(start).catch(function () {
+      sessionStorage.removeItem("dkm_key");
+      key = "";
+      el("gate").hidden = false;
+    });
+  } else {
+    el("gate").hidden = false;
+  }
+})();
+</script>
+</body>
+</html>

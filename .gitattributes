@@ -1,0 +1,26 @@
+# Normalise line endings in the repository to LF.
+#
+# Without this, a Windows clone commits CRLF and `#!/bin/sh\r` reaches a Linux
+# box, where the kernel looks for an interpreter literally named "/bin/sh\r" and
+# reports "bad interpreter: No such file or directory" — an error that names
+# neither the real cause nor the file. The install script is the first thing a
+# stranger runs, so it is the worst possible place for that.
+
+* text=auto eol=lf
+
+# Files that must be LF on every platform, including a Windows checkout.
+*.sh        text eol=lf
+*.py        text eol=lf
+*.service   text eol=lf
+Dockerfile  text eol=lf
+Makefile    text eol=lf
+.githooks/* text eol=lf
+
+# PowerShell is happy either way, but CRLF is the platform convention.
+*.ps1 text eol=crlf
+
+# Never touched.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary

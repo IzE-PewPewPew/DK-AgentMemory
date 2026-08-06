@@ -1,0 +1,37 @@
+[Unit]
+Description=DevKuong Memories embedding sidecar
+Documentation=https://github.com/IzE-PewPewPew/DK-AgentMemory
+After=network.target
+# Deliberately not Requires= from dkm.service. The API is designed to run
+# without this: search degrades to keyword-only and writes still land. Tying
+# their lifecycles together would turn a degraded feature into an outage.
+
+[Service]
+Type=simple
+User=dkm
+Group=dkm
+WorkingDirectory=/opt/dkm/embed
+Environment=EMBED_MODEL=BAAI/bge-small-en-v1.5
+Environment=HF_HOME=/var/lib/dkm/hf
+
+ExecStart=/opt/dkm/embed/venv/bin/uvicorn app:api --host 127.0.0.1 --port 8091 --workers 1
+
+Restart=on-failure
+RestartSec=10s
+# The model takes a while to download and load on first boot; systemd must not
+# call that a failed start.
+TimeoutStartSec=300
+
+# Bounded, because this is the process most likely to grow. Better for the
+# sidecar to be OOM-killed and restarted than for the kernel to pick Postgres.
+MemoryMax=1G
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dkm
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

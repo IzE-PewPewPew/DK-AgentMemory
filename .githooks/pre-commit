@@ -1,0 +1,54 @@
+#!/bin/sh
+# Pre-commit hook: gitleaks, gofmt, go vet.
+#
+# Enable it once per clone:
+#
+#     git config core.hooksPath .githooks
+#
+# The secret scan comes first and is the reason this exists. A credential caught
+# here is a non-event; the same credential caught after a push has to be
+# rotated, because a force-push does not remove it from forks, from caches, or
+# from the GitHub API.
+
+set -e
+
+fail() { printf '\npre-commit: %s\n' "$1" >&2; exit 1; }
+
+# --- secrets ---------------------------------------------------------------
+
+if command -v gitleaks >/dev/null 2>&1; then
+    if ! gitleaks protect --staged --redact --config .gitleaks.toml --no-banner; then
+        fail "gitleaks found a credential in the staged changes.
+
+If it is a real secret: remove it, and rotate it — it existed on this machine.
+If it is a test fixture: add the path to the allowlist in .gitleaks.toml,
+naming what it permits and why.
+
+To bypass once (you should have a good reason): git commit --no-verify"
+    fi
+else
+    printf 'pre-commit: gitleaks is not installed, skipping the secret scan.\n' >&2
+    printf '            https://github.com/gitleaks/gitleaks\n' >&2
+fi
+
+# --- formatting ------------------------------------------------------------
+
+staged_go=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' || true)
+
+if [ -n "$staged_go" ]; then
+    unformatted=$(gofmt -l $staged_go)
+    if [ -n "$unformatted" ]; then
+        fail "these files need gofmt:
+
+$unformatted
+
+  gofmt -w $unformatted"
+    fi
+
+    if ! go vet ./... >/dev/null 2>&1; then
+        go vet ./...
+        fail "go vet failed"
+    fi
+fi
+
+exit 0

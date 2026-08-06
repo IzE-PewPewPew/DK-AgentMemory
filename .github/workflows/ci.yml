@@ -1,0 +1,137 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.25"
+
+jobs:
+  # T1.3: a planted credential must fail CI. This runs first and alone, so a
+  # leak is caught before any other job has a chance to echo it into a log.
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0 # gitleaks needs history, not just the tip
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+      - uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
+        with:
+          version: latest
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    services:
+      # A real Postgres with pgvector. The bugs that matter in this project are
+      # integration bugs -- a predicate that does not filter, a cursor that
+      # skips a row, an index that is not used. None of them reproduce against
+      # a mock.
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: dkm
+          POSTGRES_PASSWORD: dkm
+          POSTGRES_DB: dkm
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dkm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+      - name: unit tests
+        run: go test ./... -count=1
+      - name: integration tests
+        env:
+          DKM_TEST_DATABASE_URL: postgres://dkm:dkm@127.0.0.1:5432/dkm?sslmode=disable
+        run: go test ./... -count=1 -tags=integration
+      - name: race detector
+        run: go test ./... -count=1 -race
+
+  build:
+    name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+      - name: build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          # No cgo anywhere. A binary that needs a matching libc on the target
+          # is not the single static binary this project promises.
+          CGO_ENABLED: "0"
+        run: go build -trimpath -o /dev/null ./cmd/dkm
+
+  # The MCP surface is a contract with every agent host. Twelve tools, and the
+  # protocol answering correctly before any database exists.
+  mcp:
+    name: mcp protocol
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+      - run: go build -o ./dkm ./cmd/dkm
+      - name: tools/list returns exactly twelve tools
+        env:
+          DKM_HOME: /tmp/dkm-ci
+          DKM_SERVER: https://memories.invalid
+          DKM_KEY: pmk_ci00_notarealkeyatall0
+        run: |
+          printf '%s\n%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | ./dkm mcp 2>/dev/null > out.jsonl
+          count=$(tail -n 1 out.jsonl | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["result"]["tools"]))')
+          echo "tools: $count"
+          test "$count" = "12"
