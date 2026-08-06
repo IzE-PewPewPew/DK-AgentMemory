@@ -19,15 +19,27 @@ every database-dependent claim as unverified.
 ## What has actually been run
 
 ```
-go build ./...        clean, plus every release platform via `make cross`
+go build ./...        clean, on all six release platforms
 go vet ./...          clean
+golangci-lint run     0 issues (v2.12.2, config in .golangci.yml)
+gitleaks detect       no leaks (v8, config in .gitleaks.toml)
 go test ./...         green — config, cron, redact, ulid, connect, client
+go test -race         green
 dkm mcp               initialize + tools/list return exactly 12 tools
 dkm help              renders
 ```
 
-Not run: anything touching Postgres, the Docker Compose stack, the install
-scripts, and the release pipeline.
+**CI is green** — all ten jobs on `main`: secret scan, lint, test, the MCP
+protocol check, and six build targets.
+
+One caveat about the `test` job, because a green tick is easy to over-read: it
+starts a real `pgvector/pgvector:pg16` service and runs
+`go test -tags=integration`, but **no test carries that build tag yet**, so the
+database sits idle and the step re-runs the same unit tests. The harness is in
+place; the tests that would use it are not written. See the gap under T1.7.
+
+Not run: the Docker Compose stack, the install scripts, and the release
+pipeline.
 
 ---
 
@@ -36,8 +48,8 @@ scripts, and the release pipeline.
 | ID | Task | State | Note |
 |---|---|---|---|
 | T1.1 | Repo scaffold, Makefile, Apache-2.0 | done | `make build` produces `bin/dkm` |
-| T1.2 | CI matrix | untested | Workflow written, all actions SHA-pinned. Green on first push is unproven |
-| T1.3 | gitleaks pre-commit + CI | done | `.githooks/pre-commit`, `.gitleaks.toml`, CI job. Enable with `git config core.hooksPath .githooks` |
+| T1.2 | CI matrix | **done** | Green on `main`. All actions pinned to commit SHAs |
+| T1.3 | gitleaks pre-commit + CI | **done** | `.githooks/pre-commit`, `.gitleaks.toml`, CI job, all three verified. Enable the hook with `git config core.hooksPath .githooks` |
 | T1.4 | Strict config validation | **done** | Tested: unknown key fatal with line and suggestion, missing required key fatal by name, comment-suffixed value rejected |
 | T1.5 | Migration runner | untested | Forward-only, checksummed, per-migration transaction. Needs a database to prove the second run is a no-op |
 | T1.6 | Full schema | untested | `0001_init.sql`, documented in [docs/SCHEMA.md](../SCHEMA.md) |
