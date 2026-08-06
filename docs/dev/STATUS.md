@@ -125,14 +125,34 @@ pipeline.
 
 | ID | Task | State | Note |
 |---|---|---|---|
-| T6.1 | GoReleaser, checksums, cosign | untested | Keyless OIDC signing; **all GitHub Actions pinned to commit SHAs** |
-| T6.2 | Multi-arch container to ghcr.io | untested | |
+| T6.1 | GoReleaser, checksums, cosign | **done** | `goreleaser check` clean and a full snapshot run produces six archives, checksums, a cask, and a Scoop manifest. All GitHub Actions pinned to commit SHAs. Only cosign signing is unexercised — it needs the workflow's OIDC token |
+| T6.2 | Multi-arch container to ghcr.io | untested | No Docker on the build machine |
 | T6.3 | Install scripts | untested | Both fit on a screen, verify checksums, print every change. Served from the repo rather than a domain |
-| T6.4 | Homebrew tap + Scoop manifest | partial | GoReleaser config written; the `homebrew-tap` and `scoop-bucket` repositories do not exist yet |
+| T6.4 | Homebrew tap + Scoop manifest | **done** | [homebrew-tap](https://github.com/IzE-PewPewPew/homebrew-tap) and [scoop-bucket](https://github.com/IzE-PewPewPew/scoop-bucket) exist and are wired up. Publishing to them is skipped unless a `TAP_GITHUB_TOKEN` secret is set — see below |
 | T6.5 | Docs site | **not done** | `docs/` is markdown in-repo, not published |
 | T6.6 | SECURITY.md, templates, CONTRIBUTING | done | All present, updated to match the implementation |
 | T6.7 | History scrubbed | n/a | No git history yet |
 | T6.8 | Demo GIF | **not done** | |
+
+---
+
+## Releasing
+
+Tagging `vX.Y.Z` runs the release workflow. It works with no additional setup:
+binaries, checksums, cosign signatures, and multi-arch container images.
+
+Publishing to Homebrew and Scoop is the one part that needs a secret, because
+the workflow's automatic `GITHUB_TOKEN` is scoped to this repository and cannot
+push to another one. Create a fine-grained PAT with `contents: write` on
+`homebrew-tap` and `scoop-bucket`, then:
+
+```bash
+gh secret set TAP_GITHUB_TOKEN --repo IzE-PewPewPew/DK-AgentMemory
+```
+
+Without it, the release still succeeds and simply skips those two steps. That
+is deliberate: a missing optional credential should not fail a release, and
+finding out it did at tag time is the worst moment to find out.
 
 ---
 

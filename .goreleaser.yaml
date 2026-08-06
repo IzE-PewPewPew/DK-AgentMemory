@@ -43,7 +43,7 @@ archives:
       - src: docs/**/*
         dst: docs
 
-checksums:
+checksum:
   name_template: "dkm_checksums.txt"
   algorithm: sha256
 
@@ -89,30 +89,50 @@ changelog:
       - '^ci:'
       - Merge pull request
 
-brews:
+# Publishing to the tap and the bucket needs a token that can push to *another*
+# repository, which the workflow's automatic GITHUB_TOKEN cannot do. Rather than
+# make every release depend on that secret existing, both blocks skip themselves
+# when TAP_GITHUB_TOKEN is empty.
+#
+# The result: a release works the day the repository is cloned, and starts
+# publishing packages the day someone adds the secret — with no edit here and no
+# failed release in between.
+homebrew_casks:
   - name: dkm
     repository:
       owner: IzE-PewPewPew
       name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: Casks
     homepage: https://github.com/IzE-PewPewPew/DK-AgentMemory
     description: One shared memory for every AI coding tool your team uses
     license: Apache-2.0
-    skip_upload: auto
-    test: |
-      system "#{bin}/dkm", "version"
+    skip_upload: '{{ if eq .Env.TAP_GITHUB_TOKEN "" }}true{{ else }}false{{ end }}'
+    binaries:
+      - dkm
+    hooks:
+      post:
+        # macOS quarantines anything downloaded without a Developer ID, and the
+        # first run then fails with "cannot be opened because the developer
+        # cannot be verified" — which reads like a broken download rather than
+        # a policy decision. The release archives are cosign-signed, so the
+        # provenance check has already happened by the time this runs.
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/dkm"]
+          end
 
 scoops:
   - name: dkm
     repository:
       owner: IzE-PewPewPew
       name: scoop-bucket
-      token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: bucket
     homepage: https://github.com/IzE-PewPewPew/DK-AgentMemory
     description: One shared memory for every AI coding tool your team uses
     license: Apache-2.0
-    skip_upload: auto
+    skip_upload: '{{ if eq .Env.TAP_GITHUB_TOKEN "" }}true{{ else }}false{{ end }}'
 
 release:
   draft: false

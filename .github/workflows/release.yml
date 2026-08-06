@@ -45,6 +45,14 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A PAT with `contents: write` on IzE-PewPewPew/homebrew-tap and
+          # IzE-PewPewPew/scoop-bucket. The automatic GITHUB_TOKEN is scoped to
+          # this repository alone and cannot push to either.
+          #
+          # Always defined, empty when the secret is unset — .goreleaser.yaml
+          # reads it and skips package publishing rather than failing the whole
+          # release over a missing optional step.
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
 
   # Built after the binaries so the image and the release carry the same tag.
   container:
