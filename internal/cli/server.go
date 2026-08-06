@@ -92,17 +92,19 @@ func cmdServe(ctx context.Context, args []string) int {
 			"provider", embedder.Name(), "error", err)
 	}
 
-	srv := api.New(api.Options{
-		Config:   cfg,
-		Store:    st,
-		Embedder: embedder,
-		Logger:   log,
-	})
-
 	worker, err := consolidate.NewWorker(cfg, st, embedder, log)
 	if err != nil {
 		return fail("%v", err)
 	}
+
+	srv := api.New(api.Options{
+		Config:       cfg,
+		Store:        st,
+		Embedder:     embedder,
+		Logger:       log,
+		Consolidator: consolidatorAdapter{worker},
+	})
+
 	go worker.Run(ctx)
 
 	log.Info("starting",
@@ -117,6 +119,20 @@ func cmdServe(ctx context.Context, args []string) int {
 	log.Info("stopped cleanly")
 	return 0
 }
+
+// consolidatorAdapter widens the worker's typed report to the `any` the API
+// package's interface takes.
+//
+// The alternative — making RunNow return `any` — would throw away the type
+// everywhere it is genuinely useful just to satisfy one boundary. Adapting at
+// the boundary keeps the loss where it belongs.
+type consolidatorAdapter struct{ w *consolidate.Worker }
+
+func (a consolidatorAdapter) RunNow(ctx context.Context, tiers []int) (any, error) {
+	return a.w.RunNow(ctx, tiers)
+}
+func (a consolidatorAdapter) Enabled() bool    { return a.w.Enabled() }
+func (a consolidatorAdapter) Provider() string { return a.w.Provider() }
 
 func cmdMigrate(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)

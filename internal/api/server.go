@@ -58,6 +58,8 @@ type Server struct {
 	events   *eventHub
 	mcp      http.Handler
 
+	consolidator Consolidator
+
 	routes    []route
 	mux       *http.ServeMux
 	startedAt time.Time
@@ -72,6 +74,23 @@ type Options struct {
 	// DisableMCP leaves /mcp unmounted. Only useful for tests that want to
 	// assert the REST surface in isolation.
 	DisableMCP bool
+
+	// Consolidator lets an operator run the pipeline on demand. Optional: when
+	// nil, the endpoint reports that consolidation is not available rather than
+	// disappearing, so the answer to "why is nothing being distilled" is in the
+	// response instead of in a 404.
+	Consolidator Consolidator
+}
+
+// Consolidator runs the consolidation tiers immediately.
+//
+// An interface rather than the concrete worker, because internal/consolidate
+// imports internal/store and internal/embed, and the API importing it directly
+// would make the dependency graph a cycle waiting to happen.
+type Consolidator interface {
+	RunNow(ctx context.Context, tiers []int) (any, error)
+	Enabled() bool
+	Provider() string
 }
 
 // New builds the server and registers every route.
@@ -90,8 +109,9 @@ func New(opts Options) *Server {
 			opts.Config.Security.RateLimitWritesPerMin,
 			opts.Config.Security.RateLimitReadsPerMin,
 		),
-		events:    newEventHub(),
-		startedAt: time.Now(),
+		events:       newEventHub(),
+		consolidator: opts.Consolidator,
+		startedAt:    time.Now(),
 	}
 
 	// The streamable-HTTP MCP transport is served by this same process, from
@@ -203,6 +223,12 @@ func (s *Server) buildRoutes() []route {
 		r("GET", "/v1/admin/users", "admin", "List users in the caller's team", authAdmin, s.handleListUsers),
 		r("GET", "/v1/admin/audit", "admin", "Query the audit log", authAdmin, s.handleAudit),
 		r("GET", "/v1/admin/runs", "admin", "Recent consolidation runs and token spend", authAdmin, s.handleRuns),
+		r("POST", "/v1/admin/consolidate", "admin", "Run the consolidation pipeline now instead of waiting for the schedule", authAdmin, s.handleConsolidate),
+
+		// Activity: what each connected agent has actually captured. The
+		// question "is Claude Desktop feeding this thing anything?" should be
+		// answerable without reading the sessions table by hand.
+		r("GET", "/v1/activity", "projects", "Capture activity grouped by agent", authUser, s.handleActivity),
 	}
 
 	return routes

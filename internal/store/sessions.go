@@ -123,6 +123,62 @@ func (s *Store) ListSessions(ctx context.Context, id Identity, project string, l
 	return out, rows.Err()
 }
 
+// AgentActivity is what one connected tool has contributed.
+type AgentActivity struct {
+	Agent        string     `json:"agent"`
+	Sessions     int64      `json:"sessions"`
+	Open         int64      `json:"open_sessions"`
+	Observations int64      `json:"observations"`
+	Memories     int64      `json:"memories"`
+	Summarised   int64      `json:"summarised"`
+	LastSeen     *time.Time `json:"last_seen,omitempty"`
+}
+
+// ActivityByAgent answers "is this tool actually feeding the store anything?"
+//
+// Worth its own query because the honest answer differs sharply per host: the
+// hook-capable tools produce observations continuously, while every MCP-only
+// host produces them solely when the model chooses to call a save tool. Seeing
+// zero next to a connected agent is information, not a bug — and without this
+// view the only way to find out is to read the sessions table by hand.
+func (s *Store) ActivityByAgent(ctx context.Context, id Identity) ([]AgentActivity, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT COALESCE(NULLIF(sess.agent, ''), 'unknown') AS agent,
+		       count(DISTINCT sess.id),
+		       count(DISTINCT sess.id) FILTER (WHERE sess.ended_at IS NULL),
+		       COALESCE(sum(o.n), 0),
+		       COALESCE(sum(m.n), 0),
+		       count(DISTINCT sess.id) FILTER (WHERE sess.summarised_at IS NOT NULL),
+		       max(sess.started_at)
+		FROM sessions sess
+		LEFT JOIN LATERAL (
+			SELECT count(*) AS n FROM observations o WHERE o.session_id = sess.id
+		) o ON true
+		LEFT JOIN LATERAL (
+			SELECT count(*) AS n FROM memories mm
+			WHERE mm.session_id = sess.id AND mm.deleted_at IS NULL
+		) m ON true
+		WHERE sess.team_id = $1
+		GROUP BY 1
+		ORDER BY max(sess.started_at) DESC NULLS LAST
+	`, id.TeamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []AgentActivity
+	for rows.Next() {
+		var a AgentActivity
+		if err := rows.Scan(&a.Agent, &a.Sessions, &a.Open, &a.Observations,
+			&a.Memories, &a.Summarised, &a.LastSeen); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // --- observations ----------------------------------------------------------
 
 // ObservationInput is one item of a batch ingest.

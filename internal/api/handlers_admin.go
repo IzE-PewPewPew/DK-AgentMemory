@@ -172,6 +172,78 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+type consolidateRequest struct {
+	// Tiers to run, in order. Empty means all three.
+	Tiers []int `json:"tiers,omitempty"`
+}
+
+func (s *Server) handleConsolidate(w http.ResponseWriter, r *http.Request) error {
+	var req consolidateRequest
+	if r.ContentLength > 0 {
+		if err := decodeJSON(w, r, &req); err != nil {
+			return err
+		}
+	}
+
+	if s.consolidator == nil || !s.consolidator.Enabled() {
+		// 200 with a reason, not 404 or 500. Nothing is broken — the feature is
+		// switched off, and the caller needs to be told which knob turns it on
+		// rather than left to guess whether the route exists.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ran":    false,
+			"reason": "consolidation is disabled",
+			"fix": "set consolidation.enabled: true, configure consolidation.llm, " +
+				"export the API key named by consolidation.llm.api_key_env, and restart",
+		})
+		return nil
+	}
+
+	id := identityFrom(r.Context())
+	s.log.Info("consolidation requested", "by", id.UserID, "tiers", req.Tiers,
+		"provider", s.consolidator.Provider())
+
+	// Runs inline rather than in the background. An operator who pressed a
+	// button wants the result, including the failure — a 202 and a promise to
+	// look in the logs is how "I clicked it and nothing happened" starts.
+	report, err := s.consolidator.RunNow(r.Context(), req.Tiers)
+	if err != nil {
+		return &APIError{
+			Status: http.StatusServiceUnavailable, Code: CodeUnavailable,
+			Message: err.Error(),
+			Hint:    "check consolidation.llm.base_url and that the API key environment variable is set",
+		}
+	}
+
+	s.audit(r, id, "consolidate.run", s.consolidator.Provider(), map[string]any{"tiers": req.Tiers})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ran":      true,
+		"provider": s.consolidator.Provider(),
+		"report":   report,
+	})
+	return nil
+}
+
+func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) error {
+	activity, err := s.store.ActivityByAgent(r.Context(), identityFrom(r.Context()))
+	if err != nil {
+		return fromStore(err, "activity")
+	}
+
+	consolidation := map[string]any{"enabled": false}
+	if s.consolidator != nil {
+		consolidation = map[string]any{
+			"enabled":  s.consolidator.Enabled(),
+			"provider": s.consolidator.Provider(),
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"agents":        activity,
+		"consolidation": consolidation,
+	})
+	return nil
+}
+
 func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) error {
 	runs, err := s.store.ListRuns(r.Context(), queryInt(r, "limit", 20))
 	if err != nil {

@@ -117,6 +117,106 @@ func (w *Worker) Run(ctx context.Context) {
 	wg.Wait()
 }
 
+// RunReport describes what an on-demand consolidation pass did.
+type RunReport struct {
+	Tiers    []string `json:"tiers"`
+	Duration string   `json:"duration"`
+	Errors   []string `json:"errors,omitempty"`
+
+	// Counted from the run records the tiers wrote, rather than threaded back
+	// out of each one: the schedule and this share the same code paths, so
+	// there is exactly one place that decides what a run produced.
+	SessionsSummarised int `json:"sessions_summarised"`
+	FactsProduced      int `json:"facts_produced"`
+	LessonsProduced    int `json:"lessons_produced"`
+	Deduped            int `json:"deduped"`
+	InputTokens        int `json:"input_tokens"`
+	OutputTokens       int `json:"output_tokens"`
+}
+
+// Enabled reports whether consolidation can run at all.
+func (w *Worker) Enabled() bool { return w.cfg.Consolidation.Enabled && w.llm != nil }
+
+// Provider names the configured LLM, for display.
+func (w *Worker) Provider() string {
+	if w.llm == nil {
+		return "disabled"
+	}
+	return w.llm.Name()
+}
+
+// RunNow executes the pipeline immediately instead of waiting for the schedule.
+//
+// The scheduled cadence is right for a server that has been running for weeks.
+// It is wrong for the moment someone imports a year of history and wants to see
+// lessons before going to bed — waiting until 2am to find out whether the LLM
+// endpoint is even reachable is a poor way to learn that it is not.
+//
+// Tiers run in order because each feeds the next: summaries become facts,
+// facts become lessons. Running tier 3 alone on a fresh import produces nothing,
+// correctly, and saying so is better than appearing to do work.
+func (w *Worker) RunNow(ctx context.Context, tiers []int) (*RunReport, error) {
+	if !w.Enabled() {
+		return nil, fmt.Errorf("consolidation is disabled; set consolidation.enabled and configure consolidation.llm")
+	}
+	if len(tiers) == 0 {
+		tiers = []int{1, 2, 3}
+	}
+
+	start := time.Now()
+	report := &RunReport{}
+	before := time.Now().Add(-time.Second)
+
+	for _, tier := range tiers {
+		if ctx.Err() != nil {
+			report.Errors = append(report.Errors, "cancelled")
+			break
+		}
+
+		var err error
+		switch tier {
+		case 1:
+			report.Tiers = append(report.Tiers, "session summaries")
+			err = w.tier1SessionSummaries(ctx)
+		case 2:
+			report.Tiers = append(report.Tiers, "fact extraction")
+			err = w.tier2ExtractFacts(ctx)
+		case 3:
+			report.Tiers = append(report.Tiers, "lesson synthesis")
+			err = w.tier3SynthesiseLessons(ctx)
+		default:
+			report.Errors = append(report.Errors, fmt.Sprintf("no such tier: %d", tier))
+			continue
+		}
+		if err != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("tier %d: %v", tier, err))
+		}
+	}
+
+	// Totals come from the run records the tiers just wrote.
+	if runs, err := w.store.ListRuns(ctx, 50); err == nil {
+		for _, r := range runs {
+			if r.StartedAt.Before(before) {
+				continue
+			}
+			report.InputTokens += r.InputTokens
+			report.OutputTokens += r.OutputTokens
+			report.Deduped += r.Deduped
+			switch r.Tier {
+			case 1:
+				report.SessionsSummarised += r.Produced
+			case 2:
+				report.FactsProduced += r.Produced
+			case 3:
+				report.LessonsProduced += r.Produced
+			}
+		}
+	}
+
+	report.Duration = time.Since(start).Truncate(time.Millisecond).String()
+	return report, nil
+}
+
 // everyTick runs fn on an interval.
 func (w *Worker) everyTick(ctx context.Context, interval time.Duration, name string, fn func(context.Context) error) {
 	if interval <= 0 {

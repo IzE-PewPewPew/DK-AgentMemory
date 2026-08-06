@@ -98,7 +98,9 @@
       <button data-tab="memories" aria-selected="true">Memories</button>
       <button data-tab="lessons">Lessons</button>
       <button data-tab="sessions">Sessions</button>
+      <button data-tab="activity">Activity</button>
       <button data-tab="projects">Projects</button>
+      <button data-tab="learn">Learn</button>
       <button data-tab="search">Search</button>
     </nav>
 
@@ -231,6 +233,109 @@
         render(rows
           ? '<div class="card scroll"><table><thead><tr><th>Project</th><th>Memories</th><th>Sessions</th><th>Last activity</th></tr></thead><tbody>' + rows + "</tbody></table></div>"
           : "");
+      });
+    },
+
+    activity: function () {
+      return api("/v1/activity").then(function (d) {
+        var agents = d.agents || [];
+        if (!agents.length) {
+          render('<div class="card"><h3>Nothing captured yet</h3><p>' +
+            'Only Claude Code captures automatically, through lifecycle hooks. Every other host ' +
+            'records a session when the model decides to call a memory tool — in practice, when ' +
+            'you say "remember this".</p></div>');
+          return;
+        }
+        var rows = agents.map(function (a) {
+          // Zero observations next to a connected agent is information, not a
+          // fault: MCP-only hosts genuinely produce none until asked.
+          var note = a.observations === 0 ? '<span class="tag">tool-call only</span>' : "";
+          return "<tr><td><code>" + esc(a.agent) + "</code> " + note + "</td><td>" + a.sessions +
+            "</td><td>" + a.open_sessions + "</td><td>" + a.observations + "</td><td>" + a.memories +
+            "</td><td>" + a.summarised + "</td><td>" + (a.last_seen ? esc(ago(a.last_seen)) : "—") + "</td></tr>";
+        }).join("");
+        render('<div class="card scroll"><table><thead><tr><th>Agent</th><th>Sessions</th>' +
+          "<th>Open</th><th>Observations</th><th>Memories</th><th>Summarised</th><th>Last seen</th>" +
+          "</tr></thead><tbody>" + rows + "</tbody></table></div>");
+      });
+    },
+
+    learn: function () {
+      return api("/v1/activity").then(function (act) {
+        var c = act.consolidation || {};
+        var head = '<div class="card"><h3>Consolidation</h3>';
+
+        if (c.enabled) {
+          head += "<p>Enabled via <code>" + esc(c.provider || "?") + "</code>. " +
+            "Raw sessions become summaries, summaries become facts, and recurring facts become lessons. " +
+            "This calls your LLM provider and costs tokens.</p>" +
+            '<div class="row" style="margin-top:12px">' +
+            '<button id="runlearn">Run consolidation now</button>' +
+            '<span id="learnstatus" style="align-self:center;color:var(--muted)"></span></div>';
+        } else {
+          head += "<p>Disabled. Memories are stored and searchable, but nothing is ever distilled " +
+            "into lessons. Set <code>consolidation.enabled</code>, configure " +
+            "<code>consolidation.llm</code>, export the API key named by " +
+            "<code>api_key_env</code>, and restart.</p>";
+        }
+        head += "</div>";
+
+        return api("/v1/admin/runs").then(function (d) {
+          var spend = d.spend_last_30d || {};
+          var runs = d.runs || [];
+          var tierName = { 1: "session summaries", 2: "fact extraction", 3: "lesson synthesis" };
+
+          var body = head +
+            '<div class="stats"><span>last 30 days: <b>' + (spend.input_tokens || 0) +
+            "</b> tokens in, <b>" + (spend.output_tokens || 0) + "</b> out</span></div>";
+
+          if (!runs.length) {
+            body += '<div class="empty">No consolidation runs yet.</div>';
+          } else {
+            var rows = runs.map(function (r) {
+              return "<tr><td>" + esc((r.started_at || "").slice(0, 16).replace("T", " ")) +
+                "</td><td>" + esc(tierName[r.tier] || r.tier) +
+                "</td><td>" + esc(r.project || "—") +
+                "</td><td>" + r.items + "</td><td>" + r.produced + "</td><td>" + r.deduped +
+                "</td><td>" + ((r.input_tokens || 0) + (r.output_tokens || 0)) +
+                "</td><td>" + (r.error ? '<span style="color:var(--warn)">' + esc(r.error) + "</span>" : "ok") +
+                "</td></tr>";
+            }).join("");
+            body += '<div class="card scroll"><table><thead><tr><th>When</th><th>Tier</th>' +
+              "<th>Project</th><th>Input</th><th>Produced</th><th>Deduped</th><th>Tokens</th><th>Result</th>" +
+              "</tr></thead><tbody>" + rows + "</tbody></table></div>";
+          }
+
+          render(body);
+
+          var btn = el("runlearn");
+          if (btn) {
+            btn.addEventListener("click", function () {
+              btn.disabled = true;
+              el("learnstatus").textContent = "running — this may take a minute…";
+              api("/v1/admin/consolidate", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: "{}"
+              }).then(function (res) {
+                var r = (res && res.report) || {};
+                el("learnstatus").textContent = res.ran
+                  ? (r.sessions_summarised || 0) + " summarised, " + (r.facts_produced || 0) +
+                    " facts, " + (r.lessons_produced || 0) + " lessons in " + (r.duration || "?")
+                  : (res.reason || "did not run");
+                setTimeout(function () { show("learn"); }, 1500);
+              }).catch(function (e) {
+                el("learnstatus").textContent = e.message;
+                btn.disabled = false;
+              });
+            });
+          }
+        }).catch(function (e) {
+          // The runs and trigger endpoints are admin-only. A non-admin key
+          // should see the explanation rather than a bare error.
+          render(head + '<div class="card"><p>Run history needs an admin key. ' +
+            esc(e.message) + "</p></div>");
+        });
       });
     },
     search: function () {
