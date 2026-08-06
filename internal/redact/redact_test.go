@@ -5,16 +5,34 @@ import (
 	"testing"
 )
 
-// The values below are syntactically valid and cryptographically worthless:
-// they are structured to match the rules and are not credentials for anything.
+// Fixtures for the redaction rules: syntactically valid, cryptographically
+// worthless, and credentials for nothing. The bodies are the alphabet and the
+// counting numbers.
+//
+// Each is assembled from fragments rather than written as one literal, and the
+// split is not cosmetic. These have to match patterns that mirror real
+// credential formats, so a contiguous literal here is indistinguishable from a
+// live key to GitHub's secret scanning, to whatever scanner a contributor runs
+// locally, and to the vendor notification pipelines those feed. Writing them
+// whole produced two "public leak" alerts within minutes of this repository
+// going public, and would produce the same on every fork.
+//
+// Go folds these at compile time, so the assembled values — and therefore what
+// the tests actually exercise — are byte-identical to the literals they
+// replace. Only the source text changes, and the source text is what a scanner
+// reads.
 const (
-	fakeAWSKey  = "AKIAIOSFODNN7EXAMPLE"
-	fakeSK      = "sk-abcdefghijklmnopqrstuvwxyz0123456789ABCD"
-	fakeAntSK   = "sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	fakeJWT     = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk"
-	fakeGitHub  = "ghp_1234567890abcdefghijklmnopqrstuvwxyzAB"
-	fakeGoogle  = "AIzaSyA1234567890abcdefghijklmnopqrstuv"
-	fakePEMBody = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA1234\nabcd\n-----END RSA PRIVATE KEY-----"
+	fakeAWSKey = "AKIA" + "IOSFODNN7EXAMPLE"
+	fakeSK     = "sk-" + "abcdefghijklmnopqrstuvwxyz0123456789ABCD"
+	fakeAntSK  = "sk-" + "ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	fakeGitHub = "ghp" + "_1234567890abcdefghijklmnopqrstuvwxyzAB"
+	fakeGoogle = "AIza" + "SyA1234567890abcdefghijklmnopqrstuv"
+	fakeJWT    = "eyJ" + "hbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." +
+		"eyJzdWIiOiIxMjM0NTY3ODkwIn0." +
+		"dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	fakePEMBody = "-----BEGIN RSA PRIVATE KEY" + "-----\n" +
+		"MIIEowIBAAKCAQEA1234\nabcd\n" +
+		"-----END RSA PRIVATE KEY" + "-----"
 )
 
 func TestApplyRemovesEverySecretClass(t *testing.T) {
