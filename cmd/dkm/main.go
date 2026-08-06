@@ -16,6 +16,15 @@ package main
 import (
 	"os"
 
+	// Compile the IANA timezone database into the binary.
+	//
+	// Cron schedules resolve against local time, so a container with TZ set but
+	// no /usr/share/zoneinfo silently falls back to UTC — and "0 2 * * *" fires
+	// at the wrong hour with nothing in the logs to say why. Embedding it costs
+	// about 450 KB and removes a package the runtime image would otherwise have
+	// to install over the network.
+	_ "time/tzdata"
+
 	"github.com/IzE-PewPewPew/DK-AgentMemory/internal/cli"
 )
 

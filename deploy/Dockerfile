@@ -33,8 +33,22 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 # an hour every time it is needed.
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates tzdata \
- && adduser -D -H -u 10001 dkm
+# No package manager call here, deliberately.
+#
+# The runtime stage needs exactly one thing from outside the image: a CA bundle
+# for outbound HTTPS to the embedding and LLM providers. `apk add
+# ca-certificates` fetches it over HTTPS — which fails on any host behind a
+# TLS-inspecting proxy, and fails while installing the certificates that would
+# have made it work. Copying the bundle from the build stage removes the network
+# from this stage entirely, so the image builds the same on a laptop behind a
+# corporate proxy as it does in CI.
+#
+# Timezone data is compiled into the binary instead (see cmd/dkm/main.go), so
+# there is no tzdata package to install either.
+#
+# adduser is busybox, already present in the base image.
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+RUN adduser -D -H -u 10001 dkm
 
 COPY --from=build /out/dkm /usr/local/bin/dkm
 COPY config.example.yaml /etc/dkm/config.example.yaml

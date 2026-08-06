@@ -142,18 +142,30 @@ func (c *Client) Project(dir string) Project {
 // --- transport -------------------------------------------------------------
 
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
+	_, err := c.doStatus(ctx, method, path, body, out)
+	return err
+}
+
+// doStatus is do, plus the HTTP status code.
+//
+// The distinction matters on writes: this API answers 201 for a memory it
+// created and 200 for one that already existed, and a client that only checks
+// for "no error" reports every re-import as a fresh import. That is a quiet
+// false success — the operation was correct, the summary was a lie, and the
+// only way to notice is to count rows in the database.
+func (c *Client) doStatus(ctx context.Context, method, path string, body, out any) (int, error) {
 	var reader io.Reader
 	if body != nil {
 		payload, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		reader = bytes.NewReader(payload)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, c.cfg.Server+path, reader)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.cfg.Key)
 	req.Header.Set("User-Agent", version.UserAgent())
@@ -165,18 +177,18 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	resp, err := c.http.Do(req)
 	if err != nil {
 		c.offline = true
-		return fmt.Errorf("%w: %s: %v", ErrOffline, c.cfg.Server, unwrapNetError(err))
+		return 0, fmt.Errorf("%w: %s: %v", ErrOffline, c.cfg.Server, unwrapNetError(err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return parseAPIError(resp)
+		return resp.StatusCode, parseAPIError(resp)
 	}
 	if out == nil {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil
+		return resp.StatusCode, nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return resp.StatusCode, json.NewDecoder(resp.Body).Decode(out)
 }
 
 func parseAPIError(resp *http.Response) error {
@@ -271,9 +283,12 @@ type SaveResult struct {
 // Save writes a memory.
 func (c *Client) Save(ctx context.Context, in store.MemoryInput) (*SaveResult, error) {
 	var mem store.Memory
-	err := c.do(ctx, http.MethodPost, "/v1/memories", in, &mem)
+	status, err := c.doStatus(ctx, http.MethodPost, "/v1/memories", in, &mem)
 	if err == nil {
-		return &SaveResult{Memory: &mem, Created: true}, nil
+		// 201 created, 200 already existed. Reporting the difference is what
+		// makes "imported 0, skipped 7" possible, and that line is the only
+		// visible evidence that dedup is working.
+		return &SaveResult{Memory: &mem, Created: status == http.StatusCreated}, nil
 	}
 	if !IsOffline(err) || c.mirror == nil {
 		return nil, err

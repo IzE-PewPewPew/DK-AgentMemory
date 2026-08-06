@@ -19,14 +19,15 @@ func cmdLogin(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
 	fs.SetOutput(Err)
 	key := fs.String("key", "", "API key; prompted for when omitted")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlags(fs, args)
+	if err != nil {
 		return 2
 	}
-	if fs.NArg() < 1 {
+	if len(rest) < 1 {
 		return fail("usage: dkm login <server-url> [--key <key>]")
 	}
 
-	server := strings.TrimRight(fs.Arg(0), "/")
+	server := strings.TrimRight(rest[0], "/")
 	if !strings.HasPrefix(server, "http://") && !strings.HasPrefix(server, "https://") {
 		server = "https://" + server
 	}
@@ -107,7 +108,8 @@ func cmdConnect(ctx context.Context, args []string) int {
 	fs.SetOutput(Err)
 	all := fs.Bool("all", false, "wire every detected tool")
 	list := fs.Bool("list", false, "list known tools and whether they are installed")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlags(fs, args)
+	if err != nil {
 		return 2
 	}
 
@@ -135,8 +137,8 @@ func cmdConnect(ctx context.Context, args []string) int {
 				targets = append(targets, st)
 			}
 		}
-	case fs.NArg() >= 1:
-		for _, name := range fs.Args() {
+	case len(rest) >= 1:
+		for _, name := range rest {
 			agent, ok := connect.ByID(name)
 			if !ok {
 				fmt.Fprintf(Err, "dkm: unknown agent %q. Known agents:\n", name)
@@ -216,7 +218,8 @@ func cmdDisconnect(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("disconnect", flag.ContinueOnError)
 	fs.SetOutput(Err)
 	all := fs.Bool("all", false, "remove dkm from every detected tool")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlags(fs, args)
+	if err != nil {
 		return 2
 	}
 
@@ -228,7 +231,7 @@ func cmdDisconnect(ctx context.Context, args []string) int {
 			}
 		}
 	} else {
-		for _, name := range fs.Args() {
+		for _, name := range rest {
 			a, ok := connect.ByID(name)
 			if !ok {
 				return fail("unknown agent %q", name)

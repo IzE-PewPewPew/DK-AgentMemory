@@ -455,10 +455,10 @@ func importMarkdown(ctx context.Context, args []string) int {
 	project := fs.String("project", "", "project identity; detected from the working directory when omitted")
 	apply := fs.Bool("apply", false, "actually import; without this it is a dry run")
 	team := fs.Bool("team", false, "store as team-visible")
-	if err := fs.Parse(args); err != nil {
+	paths, err := parseFlags(fs, args)
+	if err != nil {
 		return 2
 	}
-	paths := fs.Args()
 	if len(paths) == 0 {
 		paths = []string{"."}
 	}
@@ -529,13 +529,14 @@ func importNDJSON(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("import ndjson", flag.ContinueOnError)
 	fs.SetOutput(Err)
 	apply := fs.Bool("apply", false, "actually import; without this it is a dry run")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlags(fs, args)
+	if err != nil {
 		return 2
 	}
 
 	var in io.Reader = os.Stdin
-	if fs.NArg() > 0 {
-		f, err := os.Open(fs.Arg(0))
+	if len(rest) > 0 {
+		f, err := os.Open(rest[0])
 		if err != nil {
 			return fail("%v", err)
 		}

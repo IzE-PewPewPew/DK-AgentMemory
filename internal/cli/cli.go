@@ -9,6 +9,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -219,6 +220,58 @@ func cmdVersion(context.Context, []string) int {
 }
 
 // --- shared helpers --------------------------------------------------------
+
+// parseFlags parses a command's flags whether they appear before or after its
+// positional arguments, and returns the positionals.
+//
+// Go's flag package stops at the first non-flag argument. That makes
+// `dkm import markdown ./notes --apply` — the form written in the README —
+// treat `--apply` as a second path, perform a dry run, and report success. The
+// command did nothing and said so in a way that reads like an empty import
+// rather than a misparse, which is the worst kind of wrong: quiet, plausible,
+// and repeatable.
+//
+// Permuting the arguments before parsing is what every Unix CLI does and what
+// anyone typing this expects.
+func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
+	var flags, positional []string
+
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+
+		// Everything after a bare `--` is positional, by convention. This is
+		// how a file legitimately named `--apply` would be passed.
+		if a == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+
+		if len(a) > 1 && a[0] == '-' {
+			flags = append(flags, a)
+			// `--name value` consumes the next argument; `--name=value` and
+			// boolean flags do not.
+			if !strings.Contains(a, "=") {
+				if f := fs.Lookup(strings.TrimLeft(a, "-")); f != nil && !isBoolFlag(f) && i+1 < len(args) {
+					i++
+					flags = append(flags, args[i])
+				}
+			}
+			continue
+		}
+		positional = append(positional, a)
+	}
+
+	if err := fs.Parse(flags); err != nil {
+		return nil, err
+	}
+	return append(positional, fs.Args()...), nil
+}
+
+// isBoolFlag reports whether a flag takes no value.
+func isBoolFlag(f *flag.Flag) bool {
+	b, ok := f.Value.(interface{ IsBoolFlag() bool })
+	return ok && b.IsBoolFlag()
+}
 
 // fail prints an error and returns exit code 1.
 func fail(format string, a ...any) int {

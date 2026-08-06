@@ -19,11 +19,12 @@ func cmdSave(ctx context.Context, args []string) int {
 	body := fs.String("body", "", "longer detail, especially the reason")
 	team := fs.Bool("team", false, "share with the team immediately")
 	files := fs.String("files", "", "comma-separated file paths this relates to")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlags(fs, args)
+	if err != nil {
 		return 2
 	}
 
-	title := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	title := strings.TrimSpace(strings.Join(rest, " "))
 	if title == "" {
 		return fail(`usage: dkm save "the thing to remember" [--kind decision] [--team]`)
 	}
@@ -73,11 +74,12 @@ func cmdSearch(ctx context.Context, args []string) int {
 	kind := fs.String("kind", "", "comma-separated kinds to include")
 	limit := fs.Int("limit", 8, "maximum results")
 	full := fs.Bool("full", false, "print full bodies instead of one line each")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlags(fs, args)
+	if err != nil {
 		return 2
 	}
 
-	query := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	query := strings.TrimSpace(strings.Join(rest, " "))
 	if query == "" {
 		return fail(`usage: dkm search "what you want to know"`)
 	}
@@ -143,11 +145,12 @@ func cmdLesson(ctx context.Context, args []string) int {
 	project := fs.String("project", "", "project identity; omit for a rule that applies everywhere")
 	global := fs.Bool("global", false, "store without a project, so it applies to all work")
 	team := fs.Bool("team", false, "share with the team immediately")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlags(fs, args)
+	if err != nil {
 		return 2
 	}
 
-	lesson := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	lesson := strings.TrimSpace(strings.Join(rest, " "))
 	if lesson == "" {
 		return fail(`usage: dkm lesson "always X because Y" [--why "what happened"]`)
 	}
@@ -315,13 +318,14 @@ func cmdForget(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("forget", flag.ContinueOnError)
 	fs.SetOutput(Err)
 	yes := fs.Bool("yes", false, "skip the confirmation prompt")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlags(fs, args)
+	if err != nil {
 		return 2
 	}
-	if fs.NArg() < 1 {
+	if len(rest) < 1 {
 		return fail("usage: dkm forget <memory-id> [--yes]")
 	}
-	id := fs.Arg(0)
+	id := rest[0]
 
 	c, err := newClient()
 	if err != nil {
