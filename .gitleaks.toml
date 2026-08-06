@@ -38,6 +38,12 @@ paths = [
   '''internal/redact/redact_test\.go''',
   '''internal/connect/writers_test\.go''',
   '''\.gitleaks\.toml''',
+
+  # Build output. Never committed, but a working-tree scan (--no-git) walks the
+  # filesystem rather than the index, and a compiled binary contains enough
+  # high-entropy bytes to trip any entropy rule.
+  '''^dist/''',
+  '''^bin/''',
 ]
 
 regexes = [
