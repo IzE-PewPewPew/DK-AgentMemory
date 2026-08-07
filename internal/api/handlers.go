@@ -36,6 +36,15 @@ func (s *Server) embedText(ctx context.Context, text string) []float32 {
 	return vecs[0]
 }
 
+// embedQuery embeds a search query, with the retriever's instruction prefix.
+//
+// Separate from embedText because the prefix must go on queries and never on
+// stored documents: applying it to both puts every vector in the same corner of
+// the space and destroys the discrimination it exists to create.
+func (s *Server) embedQuery(ctx context.Context, query string) []float32 {
+	return s.embedText(ctx, s.cfg.Embedding.QueryPrefix()+query)
+}
+
 // --- health ----------------------------------------------------------------
 
 func (s *Server) handleLivez(w http.ResponseWriter, r *http.Request) error {
@@ -461,7 +470,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) error {
 		Limit:             req.Limit,
 		MineOnly:          req.MineOnly,
 		IncludeSuperseded: req.IncludeSuperseded,
-		Vector:            s.embedText(r.Context(), req.Query),
+		Vector:            s.embedQuery(r.Context(), req.Query),
 	}
 
 	results, err := s.store.Search(r.Context(), id, q)

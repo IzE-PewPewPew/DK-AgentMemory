@@ -28,7 +28,7 @@ func ExecuteTool(ctx context.Context, s *Server, id store.Identity, tool string,
 			Project: mcp.ArgString(args, "project"),
 			Kinds:   mcp.ArgStrings(args, "kinds"),
 			Limit:   mcp.ArgInt(args, "limit", 0),
-			Vector:  s.embedText(ctx, query),
+			Vector:  s.embedQuery(ctx, query),
 		})
 		if err != nil {
 			return nil, err

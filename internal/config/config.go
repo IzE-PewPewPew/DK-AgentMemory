@@ -73,6 +73,43 @@ type Embedding struct {
 	APIKeyEnv  string `yaml:"api_key_env"`
 	BatchSize  int    `yaml:"batch_size"`
 	Timeout    Dur    `yaml:"timeout"`
+
+	// QueryInstruction is prepended to search queries but never to stored
+	// documents.
+	//
+	// BGE and E5 are asymmetric retrievers: they are trained with an
+	// instruction on the query side only, and omitting it measurably degrades
+	// ranking. The failure is quiet — search still returns results, they are
+	// simply the wrong ones — which is far worse than an error, because the
+	// system looks like it works.
+	//
+	// Empty disables it. Left unset, a sensible default is chosen from the
+	// model name.
+	QueryInstruction string `yaml:"query_instruction"`
+}
+
+// QueryPrefix returns the instruction to prepend to search queries.
+//
+// Defaulted from the model name rather than required, because getting this
+// wrong is invisible and getting it right is mechanical.
+func (e Embedding) QueryPrefix() string {
+	if e.QueryInstruction != "" {
+		if e.QueryInstruction == "none" {
+			return ""
+		}
+		return e.QueryInstruction
+	}
+	model := strings.ToLower(e.Model)
+	switch {
+	case strings.Contains(model, "bge") && strings.Contains(model, "en"):
+		return "Represent this sentence for searching relevant passages: "
+	case strings.Contains(model, "bge"):
+		return "为这个句子生成表示以用于检索相关文章："
+	case strings.Contains(model, "e5"):
+		return "query: "
+	default:
+		return ""
+	}
 }
 
 type Search struct {

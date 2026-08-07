@@ -130,6 +130,22 @@ vec AS (SELECT NULL::text AS id, NULL::bigint AS rank WHERE false)`)
 	pHalf := a.add(s.cfg.Search.RecencyHalfLifeDays)
 	pLimit := a.add(limit)
 
+	// Strength and recency are bounded to a 15% band each, deliberately.
+	//
+	// RRF compresses ranks into a narrow range: with k=60, rank 1 scores
+	// 1/61 and rank 3 scores 1/63 — a 3% spread. Multiplying that by raw
+	// strength, which runs from 0.1 to 5.0, lets a reinforced memory outrank a
+	// far more relevant one by fifty positions. That is precisely the failure
+	// RRF exists to prevent, reintroduced one line after using it: a
+	// magnitude on an unrelated scale swamping a rank signal.
+	//
+	// Measured here on a real corpus. A lesson at strength 1.6 sitting at
+	// vector rank 3 (cosine 0.48) beat the correct answer at rank 1 (cosine
+	// 0.82), and did so for every query, because 1.6x beats 3%.
+	//
+	// So both act as tiebreakers now. Each can move a result by roughly the
+	// distance of a few rank positions and no further: enough that a proven
+	// memory wins between near-equals, never enough to override relevance.
 	sb.WriteString(`,
 fused AS (
     SELECT COALESCE(b.id, v.id) AS id,
@@ -141,8 +157,8 @@ fused AS (
 )
 SELECT ` + memoryCols + `,
        (f.rrf
-         * GREATEST(m.strength, 0.05)
-         * power(0.5, EXTRACT(EPOCH FROM (now() - m.updated_at)) / 86400.0 / ` + pHalf + `)
+         * (0.85 + 0.15 * LEAST(GREATEST(m.strength, 0) / 5.0, 1.0))
+         * (0.85 + 0.15 * power(0.5, EXTRACT(EPOCH FROM (now() - m.updated_at)) / 86400.0 / ` + pHalf + `))
        ) AS score,
        COALESCE(f.bm25_rank, 0) AS bm25_rank,
        COALESCE(f.vec_rank, 0)  AS vec_rank
