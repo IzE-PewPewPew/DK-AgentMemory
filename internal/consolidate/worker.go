@@ -233,7 +233,11 @@ func (w *Worker) RunNow(ctx context.Context, tiers []int, drain bool) (*RunRepor
 			}
 		case 2:
 			report.Tiers = append(report.Tiers, "fact extraction")
-			err = w.tier2ExtractFacts(ctx)
+			if drain {
+				err = w.drainTier2(ctx)
+			} else {
+				err = w.tier2ExtractFacts(ctx)
+			}
 		case 3:
 			report.Tiers = append(report.Tiers, "lesson synthesis")
 			err = w.tier3SynthesiseLessons(ctx)
@@ -586,10 +590,39 @@ type extractedFact struct {
 	Files []string `json:"files,omitempty"`
 }
 
+// tier2Batch is how many summarised sessions one fact-extraction pass reads.
+//
+// Larger than tier 1's because the sessions are grouped by project and one LLM
+// call covers a whole group -- the cost scales with projects, not sessions.
+const tier2Batch = 100
+
 func (w *Worker) tier2ExtractFacts(ctx context.Context) error {
-	sessions, err := w.store.SessionsAwaitingFacts(ctx, 100)
-	if err != nil || len(sessions) == 0 {
+	_, err := w.tier2Once(ctx)
+	return err
+}
+
+// drainTier2 extracts facts until every summarised session has been read.
+//
+// Same reasoning as drainTier1, and the same omission caused the same
+// confusion: a first tier-2 run over 568 summaries produced 41 facts and
+// stopped, leaving 462 sessions unread with nothing on screen to say so.
+func (w *Worker) drainTier2(ctx context.Context) error {
+	batches, err := drainLoop(ctx, tier2Batch, maxDrainBatches, w.tier2Once)
+	if err != nil {
 		return err
+	}
+	if batches == maxDrainBatches {
+		w.log.Warn("tier 2 drain hit its batch ceiling; run again to continue",
+			"batches", batches, "sessions", batches*tier2Batch)
+	}
+	return nil
+}
+
+// tier2Once reads one batch and reports how many sessions it claimed.
+func (w *Worker) tier2Once(ctx context.Context) (int, error) {
+	sessions, err := w.store.SessionsAwaitingFacts(ctx, tier2Batch)
+	if err != nil || len(sessions) == 0 {
+		return 0, err
 	}
 
 	// Group by team and project: facts are about a project, and a prompt that
@@ -602,13 +635,13 @@ func (w *Worker) tier2ExtractFacts(ctx context.Context) error {
 
 	for key, group := range groups {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return len(sessions), ctx.Err()
 		}
 		if err := w.extractForProject(ctx, key[0], key[1], group); err != nil {
 			w.log.Error("fact extraction failed", "team", key[0], "project", key[1], "error", err)
 		}
 	}
-	return nil
+	return len(sessions), nil
 }
 
 func (w *Worker) extractForProject(ctx context.Context, teamID, project string, sessions []store.Session) error {

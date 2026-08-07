@@ -15,7 +15,7 @@ func cmdConsolidate(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("consolidate", flag.ContinueOnError)
 	fs.SetOutput(Err)
 	tierList := fs.String("tiers", "", "comma-separated tiers to run: 1 summaries, 2 facts, 3 lessons. Default all three, in order.")
-	drain := fs.Bool("drain", false, "summarise every waiting session, not just the next batch of 25")
+	drain := fs.Bool("drain", false, "work through the whole backlog, not just the next batch")
 	if _, err := parseFlags(fs, args); err != nil {
 		return 2
 	}
