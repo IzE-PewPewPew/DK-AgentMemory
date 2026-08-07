@@ -215,6 +215,8 @@ func (s *Server) buildRoutes() []route {
 		r("POST", "/v1/share/{id}", "sharing", "Promote a private memory to team visibility", authUser, s.handleShare),
 		r("GET", "/v1/feed", "sharing", "Recently shared team memories", authUser, s.handleFeed),
 
+		r("GET", "/v1/progress", "memory", "How far consolidation has got", authUser, s.handleProgress),
+
 		// Prompt composition. authUser, not authAdmin: it writes nothing, is
 		// scoped to the caller's own request, and is meant to be used daily.
 		// Cost is bounded by the rate limiter, which is the right place for it.

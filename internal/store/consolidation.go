@@ -231,3 +231,45 @@ func (s *Store) TokenSpend(ctx context.Context, since time.Time) (in, out int64,
 	`, since).Scan(&in, &out)
 	return
 }
+
+// ConsolidationProgress is how far the pipeline has got, counted the same way
+// the pipeline itself decides what to do next.
+type ConsolidationProgress struct {
+	// Eligible is the denominator: closed sessions. Open ones are never
+	// summarised, so counting them makes a progress bar that cannot reach the
+	// end however long it runs.
+	Eligible int64 `json:"eligible"`
+	// Read is the numerator, defined as "has left the tier-1 queue" rather than
+	// "has non-empty summary text". They are not the same: a session with no
+	// observations, or one too large for the model to summarise, is marked done
+	// with an empty summary. Counting only non-empty text meant real work moved
+	// sessions out of the queue while the number on screen stayed still --
+	// which is exactly what a stalled run looks like.
+	Read      int64      `json:"read"`
+	Open      int64      `json:"open"`
+	Facts     int64      `json:"facts"`
+	Lessons   int64      `json:"lessons"`
+	Running   bool       `json:"running"`
+	LastRunAt *time.Time `json:"last_run_at,omitempty"`
+}
+
+// Progress reports pipeline state for the whole team.
+func (s *Store) Progress(ctx context.Context, id Identity) (*ConsolidationProgress, error) {
+	var p ConsolidationProgress
+	err := s.pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*) FROM sessions WHERE team_id = $1 AND ended_at IS NOT NULL),
+		  (SELECT count(*) FROM sessions WHERE team_id = $1 AND ended_at IS NOT NULL AND summarised_at IS NOT NULL),
+		  (SELECT count(*) FROM sessions WHERE team_id = $1 AND ended_at IS NULL),
+		  (SELECT count(*) FROM memories WHERE team_id = $1 AND deleted_at IS NULL
+		     AND kind IN ('fact','decision','preference')),
+		  (SELECT count(*) FROM memories WHERE team_id = $1 AND deleted_at IS NULL AND kind = 'lesson'),
+		  -- A run is only "in progress" if it started recently. Without the
+		  -- staleness guard, one row orphaned by a cancelled request reads as
+		  -- working for ever; this database already held seven of them.
+		  EXISTS (SELECT 1 FROM consolidation_runs
+		           WHERE finished_at IS NULL AND started_at > now() - interval '30 minutes'),
+		  (SELECT max(started_at) FROM consolidation_runs)
+	`, id.TeamID).Scan(&p.Eligible, &p.Read, &p.Open, &p.Facts, &p.Lessons, &p.Running, &p.LastRunAt)
+	return &p, err
+}

@@ -487,7 +487,16 @@ func (w *Worker) tier1Once(ctx context.Context) (int, error) {
 			"sessions", len(sessions), "summaries", produced, "skipped", skipped,
 			"input_tokens", inTok, "output_tokens", outTok)
 	}
-	if err := w.store.FinishRun(ctx, runID, len(sessions), produced, 0, inTok, outTok, runErr); err != nil {
+	// Bookkeeping must outlive the request that started it.
+	//
+	// FinishRun used to take the same ctx as the work. When a drain is run from
+	// the CLI and the operator presses Ctrl-C -- or the server is restarted, or
+	// the client simply disconnects -- that context is already cancelled by the
+	// time the run is closed out, so the UPDATE never lands and the row keeps
+	// finished_at NULL for ever. Seven such rows accumulated in this database
+	// before it was noticed, and every one of them reads as a run still in
+	// progress.
+	if err := w.store.FinishRun(context.WithoutCancel(ctx), runID, len(sessions), produced, 0, inTok, outTok, runErr); err != nil {
 		return len(sessions), err
 	}
 	return len(sessions), runErr
@@ -654,7 +663,7 @@ func (w *Worker) extractForProject(ctx context.Context, teamID, project string, 
 	var runErr error
 
 	defer func() {
-		_ = w.store.FinishRun(ctx, runID, len(sessions), produced, deduped, inTok, outTok, runErr)
+		_ = w.store.FinishRun(context.WithoutCancel(ctx), runID, len(sessions), produced, deduped, inTok, outTok, runErr)
 	}()
 
 	identity, err := w.store.AnyUserInTeam(ctx, teamID)
@@ -818,7 +827,7 @@ func (w *Worker) synthesiseForProject(ctx context.Context, teamID, project strin
 	var produced, deduped, inTok, outTok int
 	var runErr error
 	defer func() {
-		_ = w.store.FinishRun(ctx, runID, len(facts), produced, deduped, inTok, outTok, runErr)
+		_ = w.store.FinishRun(context.WithoutCancel(ctx), runID, len(facts), produced, deduped, inTok, outTok, runErr)
 	}()
 
 	identity, err := w.store.AnyUserInTeam(ctx, teamID)

@@ -56,7 +56,9 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
-	memories := s.groundingFor(r, id, req)
+	// Narrowed to what will actually reach the model, so the response reports
+	// the grounding rather than the retrieval.
+	memories := compose.Select(s.groundingFor(r, id, req))
 	in := compose.Input{
 		Task:     req.Description,
 		Project:  req.Project,
@@ -138,7 +140,9 @@ func (s *Server) handlePromptPreview(w http.ResponseWriter, r *http.Request) err
 	}
 	id := identityFrom(r.Context())
 
-	memories := s.groundingFor(r, id, req)
+	// Narrowed to what will actually reach the model, so the response reports
+	// the grounding rather than the retrieval.
+	memories := compose.Select(s.groundingFor(r, id, req))
 	in := compose.Input{
 		Task:     req.Description,
 		Project:  req.Project,
@@ -158,6 +162,20 @@ func (s *Server) handlePromptPreview(w http.ResponseWriter, r *http.Request) err
 		// request is a cheap one before they pay for it.
 		"estimated_input_tokens": (len(compose.System) + len(user)) / 4,
 	})
+	return nil
+}
+
+// handleProgress reports how far the consolidation pipeline has got.
+//
+// authUser, not authAdmin: /v1/admin/runs is admin-only, and the progress
+// indicator has to work for an ordinary read key or it is absent exactly when
+// someone is wondering whether anything is happening.
+func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) error {
+	p, err := s.store.Progress(r.Context(), identityFrom(r.Context()))
+	if err != nil {
+		return fromStore(err, "progress")
+	}
+	writeJSON(w, http.StatusOK, p)
 	return nil
 }
 

@@ -63,6 +63,19 @@
   .tag.team { border-color: var(--accent); }
   .empty { color: var(--muted); padding: 32px 0; text-align: center; }
   .dim { color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+  .runbar {
+    display: flex; align-items: center; gap: 11px; flex-wrap: wrap;
+    border: 1px solid var(--line); border-radius: 9px;
+    padding: 9px 13px; margin-bottom: 11px; font-size: 12.5px;
+  }
+  .runbar .bar { width: 190px; height: 6px; margin: 0; }
+  .runbar b { color: var(--ink); font-weight: 600; }
+  .runbar.busy { border-color: var(--accent); }
+  .runbar .spin {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
   textarea, input[type=text], input:not([type]) {
     width: 100%; background: var(--bg); color: var(--ink);
     border: 1px solid var(--line); border-radius: 7px; padding: 8px 11px;
@@ -140,6 +153,15 @@
     </nav>
 
     <div id="error" class="err" hidden></div>
+
+    <!--
+      The run bar lives here, outside #list, on purpose. Every tab render calls
+      render("") which replaces #list wholesale, so anything drawn inside it
+      vanishes the moment the user looks at another tab — which is how a paid
+      multi-hour drain became invisible while it was still running.
+    -->
+    <div id="runbar" class="runbar" hidden></div>
+
     <div id="stats" class="stats"></div>
 
     <div class="row" id="searchrow" hidden>
@@ -232,13 +254,51 @@
     api("/v1/healthz").then(function (h) {
       var s = h.stats || {};
       el("stats").innerHTML =
-        "<span><b>" + (s.memories || 0) + "</b> memories</span>" +
-        "<span><b>" + (s.sessions || 0) + "</b> sessions</span>" +
-        "<span><b>" + (s.observations || 0) + "</b> observations</span>" +
-        "<span><b>" + (s.memories_embedded || 0) + "</b> embedded</span>" +
+        "<span><b>" + num(s.memories || 0) + "</b> memories</span>" +
+        "<span><b>" + num(s.sessions || 0) + "</b> sessions</span>" +
+        "<span><b>" + num(s.observations || 0) + "</b> observations</span>" +
+        "<span><b>" + num(s.memories_embedded || 0) + "</b> embedded</span>" +
         "<span>embedder: <b>" + esc((h.embedder && (h.embedder.detail || (h.embedder.ok ? "ok" : "down"))) || "?") + "</b></span>" +
         "<span>v<b>" + esc(h.version || "?") + "</b></span>";
     }).catch(function () { el("stats").textContent = ""; });
+
+    loadProgress();
+  }
+
+  // The one line that answers "did it read my work, and is it still going?"
+  //
+  // Counted the way the pipeline counts: the denominator is closed sessions,
+  // because open ones are never eligible and including them makes a bar that
+  // can never fill; the numerator is "has left the queue", because a session
+  // skipped for being empty or too large is done, and counting only sessions
+  // with summary text made real progress look like no progress.
+  function loadProgress() {
+    api("/v1/progress").then(function (p) {
+      var bar = el("runbar");
+      var pct = p.eligible ? Math.round((p.read / p.eligible) * 100) : 0;
+      var parts = [];
+
+      if (p.running) {
+        parts.push('<span class="spin"></span><span>Reading your sessions now…</span>');
+      } else if (p.eligible && p.read >= p.eligible) {
+        parts.push("<span>All sessions read.</span>");
+      } else if (p.eligible) {
+        parts.push("<span>Not finished reading.</span>");
+      } else {
+        bar.hidden = true;
+        return;
+      }
+
+      parts.push('<span class="bar"><span style="width:' + pct + '%"></span></span>');
+      parts.push("<span><b>" + num(p.read) + "</b> of <b>" + num(p.eligible) + "</b> sessions read</span>");
+      parts.push("<span><b>" + num(p.facts) + "</b> facts</span>");
+      parts.push("<span><b>" + num(p.lessons) + "</b> lessons</span>");
+      if (p.open) parts.push('<span class="dim">' + num(p.open) + " still open</span>");
+
+      bar.className = "runbar" + (p.running ? " busy" : "");
+      bar.innerHTML = parts.join("");
+      bar.hidden = false;
+    }).catch(function () { el("runbar").hidden = true; });
   }
 
   var views = {

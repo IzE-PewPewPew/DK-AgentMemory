@@ -257,6 +257,40 @@ func selected(emphases []string) []string {
 // is exactly the invention the grounding rule forbids.
 const NoMemories = "(none — you know nothing about this codebase)"
 
+// Select applies the caps and returns exactly the memories that will reach the
+// model.
+//
+// Exported and used by the caller as well as by Build, so that what the API
+// reports as "grounded in" is what was actually sent. Reporting the retrieved
+// count instead overstates the grounding: retrieval happily returns seventeen
+// memories, of which eight fit, and a developer auditing a constraint against a
+// list containing nine memories the model never saw is being misled.
+func Select(ms []Memory) []Memory {
+	var out []Memory
+	total := 0
+	for _, m := range ms {
+		if len(out) >= maxMemories {
+			break
+		}
+		if total+len(memoryLine(m)) > maxMemoryChars {
+			break
+		}
+		total += len(memoryLine(m))
+		out = append(out, m)
+	}
+	return out
+}
+
+func memoryLine(m Memory) string {
+	title := oneLine(m.Title)
+	body := truncate(oneLine(m.Body), maxMemoryBody)
+	line := "- " + title
+	if body != "" && !strings.EqualFold(body, title) {
+		line += ": " + body
+	}
+	return line
+}
+
 // renderMemories formats retrieved memories for the prompt.
 //
 // Deliberately stripped of ids, kinds, scores, dates and project names. Every
@@ -264,29 +298,13 @@ const NoMemories = "(none — you know nothing about this codebase)"
 // into the output; the developer sees provenance in the API response instead,
 // where it costs nothing.
 func renderMemories(ms []Memory) string {
-	if len(ms) == 0 {
+	used := Select(ms)
+	if len(used) == 0 {
 		return NoMemories
 	}
-	var lines []string
-	total := 0
-	for _, m := range ms {
-		if len(lines) >= maxMemories {
-			break
-		}
-		title := oneLine(m.Title)
-		body := truncate(oneLine(m.Body), maxMemoryBody)
-		line := "- " + title
-		if body != "" && !strings.EqualFold(body, title) {
-			line += ": " + body
-		}
-		if total+len(line) > maxMemoryChars {
-			break
-		}
-		total += len(line)
-		lines = append(lines, line)
-	}
-	if len(lines) == 0 {
-		return NoMemories
+	lines := make([]string, 0, len(used))
+	for _, m := range used {
+		lines = append(lines, memoryLine(m))
 	}
 	return strings.Join(lines, "\n")
 }

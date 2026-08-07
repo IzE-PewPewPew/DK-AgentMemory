@@ -142,6 +142,47 @@ func TestRenderMemoriesBounded(t *testing.T) {
 	}
 }
 
+// What the API reports as "grounded in" must be what was sent. Retrieval
+// happily returns seventeen memories, of which eight fit; auditing a constraint
+// against a list containing nine the model never saw is worse than no list.
+func TestSelectMatchesWhatTheModelSees(t *testing.T) {
+	var ms []Memory
+	for i := 0; i < 17; i++ {
+		ms = append(ms, Memory{ID: string(rune('a' + i)), Kind: "fact",
+			Title: "memory " + string(rune('a'+i)), Body: "short"})
+	}
+
+	used := Select(ms)
+	if len(used) != maxMemories {
+		t.Fatalf("Select returned %d, want %d", len(used), maxMemories)
+	}
+
+	block := between(Build(Input{Task: "x", Memories: ms}), "MEMORIES\n", "\n\nREQUEST")
+	for _, m := range used {
+		if !strings.Contains(block, m.Title) {
+			t.Errorf("%q was selected but is not in the prompt", m.Title)
+		}
+	}
+	// And nothing beyond the selection reached it.
+	for _, m := range ms[len(used):] {
+		if strings.Contains(block, m.Title) {
+			t.Errorf("%q was not selected but appears in the prompt", m.Title)
+		}
+	}
+}
+
+func TestSelectRespectsTheCharacterBudget(t *testing.T) {
+	var ms []Memory
+	for i := 0; i < 8; i++ {
+		ms = append(ms, Memory{ID: string(rune('a' + i)), Title: "t",
+			Body: strings.Repeat("x", maxMemoryBody)})
+	}
+	used := Select(ms)
+	if len(used) >= 8 {
+		t.Errorf("selected %d long memories; the character budget should have bitten first", len(used))
+	}
+}
+
 func TestRankPutsLessonsFirst(t *testing.T) {
 	got := Rank([]Memory{
 		{Kind: "fact", Title: "f", Score: 0.99},
