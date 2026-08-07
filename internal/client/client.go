@@ -221,8 +221,12 @@ func (c *Client) doAttempt(ctx context.Context, method, path string, body, out a
 	// documented import path.
 	if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
 		wait := retryAfter(resp)
+		// Drained and closed before sleeping so the connection returns to the
+		// pool; a retry loop that leaks a connection per attempt exhausts the
+		// pool exactly when it is retrying hardest. The deferred Close above
+		// runs too, and closing twice is harmless.
 		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		select {
 		case <-ctx.Done():
