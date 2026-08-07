@@ -9,6 +9,18 @@ import (
 )
 
 func cmdAdmin(ctx context.Context, args []string) int {
+	// Single-word subjects first. `dkm admin runs` has no action word, and the
+	// two-argument check below would otherwise answer it with a usage message
+	// that lists `dkm admin runs` as a valid command.
+	if len(args) >= 1 {
+		switch args[0] {
+		case "runs":
+			return adminRuns(ctx)
+		case "audit":
+			return adminAudit(ctx, args[1:])
+		}
+	}
+
 	if len(args) < 2 {
 		fmt.Fprintln(Err, "usage: dkm admin <subject> <action> [flags]")
 		fmt.Fprintln(Err, "\n  dkm admin team create --id acme --name \"Acme Engineering\"")

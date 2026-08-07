@@ -16,7 +16,6 @@ package consolidate
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -471,8 +470,8 @@ func (w *Worker) extractForProject(ctx context.Context, teamID, project string, 
 	inTok, outTok = resp.InputTokens, resp.OutputTokens
 
 	var facts []extractedFact
-	if err := json.Unmarshal([]byte(extractJSON(resp.Text)), &facts); err != nil {
-		runErr = fmt.Errorf("model did not return a JSON array: %w", err)
+	if err := decodeList(resp.Text, &facts); err != nil {
+		runErr = fmt.Errorf("could not read the extracted facts: %w", err)
 		return runErr
 	}
 
@@ -537,7 +536,10 @@ func (w *Worker) extractForProject(ctx context.Context, teamID, project string, 
 
 const tier2System = `You extract durable facts from session summaries for a shared engineering memory.
 
-Reply with a JSON array and nothing else. Each element:
+Reply with a JSON object and nothing else, shaped exactly like this:
+  {"facts": [ ... ]}
+
+Each element of that array:
   {"kind": "fact" | "decision" | "preference", "title": "one line", "body": "the detail and the reason", "files": ["optional/paths"]}
 
 Extract only what will still be true and useful in three months:
@@ -552,7 +554,7 @@ Do not extract:
 - Transient state, or problems that were fixed within the session
 
 A decision without its reason is not worth storing; either include the reason or drop the item.
-If nothing qualifies, reply with exactly: []`
+If nothing qualifies, reply with exactly: {"facts": []}`
 
 // --- tier 3: lesson synthesis ----------------------------------------------
 
@@ -626,8 +628,8 @@ func (w *Worker) synthesiseForProject(ctx context.Context, teamID, project strin
 	inTok, outTok = resp.InputTokens, resp.OutputTokens
 
 	var lessons []synthesisedLesson
-	if err := json.Unmarshal([]byte(extractJSON(resp.Text)), &lessons); err != nil {
-		runErr = fmt.Errorf("model did not return a JSON array: %w", err)
+	if err := decodeList(resp.Text, &lessons); err != nil {
+		runErr = fmt.Errorf("could not read the synthesised lessons: %w", err)
 		return runErr
 	}
 
@@ -674,7 +676,10 @@ func (w *Worker) synthesiseForProject(ctx context.Context, teamID, project strin
 
 const tier3System = `You turn recorded facts into durable rules for an engineering team.
 
-Reply with a JSON array and nothing else. Each element:
+Reply with a JSON object and nothing else, shaped exactly like this:
+  {"lessons": [ ... ]}
+
+Each element of that array:
   {"lesson": "an imperative rule, one line", "why": "the incident or reasoning behind it", "files": ["optional/paths"]}
 
 A lesson must:
@@ -687,7 +692,7 @@ Do not produce:
 - Generic engineering advice that is not specific to this project
 - Anything you cannot point at evidence for in the input
 
-Most inputs justify zero or one lesson. If nothing qualifies, reply with exactly: []`
+Most inputs justify zero or one lesson. If nothing qualifies, reply with exactly: {"lessons": []}`
 
 // --- maintenance -----------------------------------------------------------
 

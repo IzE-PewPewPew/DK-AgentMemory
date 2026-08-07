@@ -715,6 +715,23 @@ func (c *Client) Admin(ctx context.Context, method, path string, body any, out a
 	return c.do(ctx, method, path, body, out)
 }
 
+// AdminLong is Admin without the client-side deadline.
+//
+// The default 30-second timeout is right for an API that answers from Postgres.
+// It is wrong for consolidation, whose duration is set by an LLM provider: the
+// server finishes the work and writes the results, while the client gives up
+// waiting and reports "server unreachable" — then advises falling back to the
+// mirror, which is advice for a completely different situation. The operation
+// succeeded and the operator was told it failed.
+//
+// Cancellation comes from ctx instead, which is what Ctrl-C already uses.
+func (c *Client) AdminLong(ctx context.Context, method, path string, body, out any) error {
+	saved := c.http.Timeout
+	c.http.Timeout = 0
+	defer func() { c.http.Timeout = saved }()
+	return c.do(ctx, method, path, body, out)
+}
+
 // --- helpers ---------------------------------------------------------------
 
 // q builds a query string from alternating key/value pairs, dropping empties.

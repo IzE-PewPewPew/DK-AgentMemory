@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
@@ -212,13 +213,20 @@ func (o *openAI) Complete(ctx context.Context, req Request) (*Response, error) {
 
 	var out struct {
 		Choices []struct {
-			Message struct {
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
 				Content string `json:"content"`
+				// Reasoning models return their working here and the answer in
+				// Content. Read only for diagnostics — never fed downstream.
+				ReasoningContent string `json:"reasoning_content"`
 			} `json:"message"`
 		} `json:"choices"`
 		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
+			PromptTokens            int `json:"prompt_tokens"`
+			CompletionTokens        int `json:"completion_tokens"`
+			CompletionTokensDetails struct {
+				ReasoningTokens int `json:"reasoning_tokens"`
+			} `json:"completion_tokens_details"`
 		} `json:"usage"`
 	}
 
@@ -228,8 +236,26 @@ func (o *openAI) Complete(ctx context.Context, req Request) (*Response, error) {
 	if len(out.Choices) == 0 {
 		return nil, fmt.Errorf("provider returned no choices")
 	}
+
+	choice := out.Choices[0]
+	if strings.TrimSpace(choice.Message.Content) == "" {
+		// Empty content with a length finish is a reasoning model that spent
+		// its whole budget thinking. "no JSON returned" sends the operator
+		// looking at the prompt; naming the real cause sends them to the one
+		// setting that fixes it.
+		if choice.FinishReason == "length" {
+			return nil, fmt.Errorf(
+				"model produced no answer: it hit the token limit after %d reasoning tokens. "+
+					"Raise consolidation.llm.max_tokens — reasoning models spend it before writing anything",
+				out.Usage.CompletionTokensDetails.ReasoningTokens)
+		}
+		if choice.Message.ReasoningContent != "" {
+			return nil, fmt.Errorf("model returned reasoning but no answer (finish_reason %q)", choice.FinishReason)
+		}
+	}
+
 	return &Response{
-		Text:         out.Choices[0].Message.Content,
+		Text:         choice.Message.Content,
 		InputTokens:  out.Usage.PromptTokens,
 		OutputTokens: out.Usage.CompletionTokens,
 	}, nil
@@ -335,6 +361,69 @@ func completeWithRetry(ctx context.Context, p Provider, req Request) (*Response,
 		}
 	}
 	return nil, lastErr
+}
+
+// decodeList unmarshals a list of items from a model response that may be
+// either a bare JSON array or an object wrapping one.
+//
+// This exists because the two things we ask for are in tension. Setting
+// response_format to json_object is what makes a provider reliably emit valid
+// JSON — but that mode requires the top level to be an *object*, so a prompt
+// asking for a bare array is asking for something the mode forbids. A
+// well-behaved model resolves the contradiction by wrapping the array, and a
+// parser expecting only `[...]` then rejects a perfectly good answer on every
+// single call.
+//
+// Providers also disagree about the wrapper's name, so known names are tried
+// first and any array-valued property second.
+func decodeList[T any](raw string, out *[]T) error {
+	trimmed := strings.TrimSpace(extractJSON(raw))
+	if trimmed == "" {
+		return fmt.Errorf("model returned no JSON")
+	}
+
+	if trimmed[0] == '[' {
+		return json.Unmarshal([]byte(trimmed), out)
+	}
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &obj); err != nil {
+		return fmt.Errorf("model returned neither an array nor an object: %w", err)
+	}
+
+	for _, key := range []string{"facts", "lessons", "items", "results", "memories", "data", "output", "list"} {
+		if v, ok := obj[key]; ok {
+			if err := json.Unmarshal(v, out); err == nil {
+				return nil
+			}
+		}
+	}
+	for _, v := range obj {
+		if len(bytes.TrimSpace(v)) > 0 && bytes.TrimSpace(v)[0] == '[' {
+			if err := json.Unmarshal(v, out); err == nil {
+				return nil
+			}
+		}
+	}
+
+	// An object that is itself a single item, which is what a model returns
+	// when it finds exactly one thing and forgets it was asked for a list.
+	//
+	// The zero-value check is the whole point of this branch. Go's decoder
+	// happily unmarshals {"status":"ok"} into any struct, ignoring every
+	// unknown key and setting no fields — so without it, a status envelope
+	// becomes one blank memory that gets written to the database. Silently
+	// storing an empty record is worse than reporting that the reply made no
+	// sense.
+	var single, zero T
+	if err := json.Unmarshal([]byte(trimmed), &single); err == nil {
+		if !reflect.DeepEqual(single, zero) {
+			*out = []T{single}
+			return nil
+		}
+	}
+
+	return fmt.Errorf("model returned a JSON object with no array in it")
 }
 
 // extractJSON pulls a JSON value out of a model response.

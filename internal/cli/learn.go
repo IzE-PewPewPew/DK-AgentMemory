@@ -57,7 +57,15 @@ func cmdConsolidate(ctx context.Context, args []string) int {
 	if len(tiers) > 0 {
 		body["tiers"] = tiers
 	}
-	if err := c.Admin(ctx, http.MethodPost, "/v1/admin/consolidate", body, &out); err != nil {
+
+	// An hour, not the default 30 seconds. How long this takes is decided by
+	// how many sessions are queued and how fast the LLM provider is, neither of
+	// which this client can predict. Ctrl-C still works, because the deadline
+	// hangs off the same context.
+	ctx, cancel := context.WithTimeout(ctx, time.Hour)
+	defer cancel()
+
+	if err := c.AdminLong(ctx, http.MethodPost, "/v1/admin/consolidate", body, &out); err != nil {
 		return failErr(err)
 	}
 
