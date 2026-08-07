@@ -153,7 +153,36 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 // for "no error" reports every re-import as a fresh import. That is a quiet
 // false success — the operation was correct, the summary was a lie, and the
 // only way to notice is to count rows in the database.
+// maxRateLimitRetries bounds the backoff loop. High enough that a bulk import
+// rides out a full budget window, low enough that a genuinely stuck client
+// gives up rather than hanging for ever.
+const maxRateLimitRetries = 30
+
+// retryAfter reads the server's requested delay, with a floor and a ceiling.
+//
+// The floor stops a malformed or zero value turning backoff into a spin. The
+// ceiling stops a hostile or mistaken header parking the client for an hour.
+func retryAfter(resp *http.Response) time.Duration {
+	wait := 2 * time.Second
+	if v := resp.Header.Get("Retry-After"); v != "" {
+		if secs, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && secs > 0 {
+			wait = time.Duration(secs) * time.Second
+		}
+	}
+	if wait < time.Second {
+		wait = time.Second
+	}
+	if wait > 60*time.Second {
+		wait = 60 * time.Second
+	}
+	return wait
+}
+
 func (c *Client) doStatus(ctx context.Context, method, path string, body, out any) (int, error) {
+	return c.doAttempt(ctx, method, path, body, out, 0)
+}
+
+func (c *Client) doAttempt(ctx context.Context, method, path string, body, out any, attempt int) (int, error) {
 	var reader io.Reader
 	if body != nil {
 		payload, err := json.Marshal(body)
@@ -180,6 +209,28 @@ func (c *Client) doStatus(ctx context.Context, method, path string, body, out an
 		return 0, fmt.Errorf("%w: %s: %v", ErrOffline, c.cfg.Server, unwrapNetError(err))
 	}
 	defer resp.Body.Close()
+
+	// A 429 is not a failure, it is an instruction. The server states exactly
+	// how long to wait in Retry-After; honouring it is the entire contract.
+	//
+	// Not doing so made a bulk import fail 531 of 567 transcripts against its
+	// own server: the importer legitimately writes three times per transcript,
+	// the default budget is 100 writes a minute, and every request past that
+	// was reported to the user as an error rather than as backpressure. The
+	// rate limiter exists to stop a runaway hook loop, not to stop the
+	// documented import path.
+	if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
+		wait := retryAfter(resp)
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+
+		select {
+		case <-ctx.Done():
+			return resp.StatusCode, ctx.Err()
+		case <-time.After(wait):
+		}
+		return c.doAttempt(ctx, method, path, body, out, attempt+1)
+	}
 
 	if resp.StatusCode >= 400 {
 		return resp.StatusCode, parseAPIError(resp)

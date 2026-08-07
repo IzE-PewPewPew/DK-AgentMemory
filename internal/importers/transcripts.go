@@ -82,6 +82,10 @@ func DefaultCodexRoot() string {
 	return filepath.Join(home, ".codex", "sessions")
 }
 
+// Progress reports scanning advancement. Called on the scanning goroutine, so
+// implementations must not block.
+type Progress func(scanned, total int, current string)
+
 // ScanJSONL walks a directory of .jsonl transcripts and parses each one.
 //
 // Project identity is resolved per transcript from the working directory the
@@ -89,7 +93,13 @@ func DefaultCodexRoot() string {
 // folder names. Those folder names are path-derived
 // (-Users-me-dev-api), so grouping by them would reproduce exactly the
 // path-based identity that stops one person's memories reaching a teammate.
-func ScanJSONL(root, agent string) (*Preview, error) {
+//
+// progress may be nil. It exists because scanning a real history is not fast:
+// several hundred megabytes, with fifteen credential patterns run over every
+// observation, takes tens of minutes. A command that prints nothing for half an
+// hour has not communicated "working" — it has communicated "hung", and the
+// reasonable response to that is Ctrl-C.
+func ScanJSONL(root, agent string, progress Progress) (*Preview, error) {
 	if root == "" {
 		return nil, fmt.Errorf("no transcript directory given")
 	}
@@ -126,7 +136,11 @@ func ScanJSONL(root, agent string) (*Preview, error) {
 	// hundred transcripts from one repo should not mean a hundred git calls.
 	projectCache := map[string]client.Project{}
 
-	for _, path := range paths {
+	for i, path := range paths {
+		if progress != nil {
+			progress(i+1, len(paths), filepath.Base(path))
+		}
+
 		t, err := parseJSONL(path, agent, projectCache)
 		if err != nil {
 			preview.Skipped++

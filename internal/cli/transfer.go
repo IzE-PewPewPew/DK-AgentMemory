@@ -329,7 +329,28 @@ func importTranscripts(ctx context.Context, args []string, defaultRoot, agent st
 		return 2
 	}
 
-	preview, err := importers.ScanJSONL(*root, agent)
+	fmt.Fprintf(Out, "Scanning %s\n", shorten(*root))
+	fmt.Fprintln(Out, "Every observation is checked against fifteen credential patterns, so this is")
+	fmt.Fprintln(Out, "slow on a large history. Progress below.")
+	fmt.Fprintln(Out)
+
+	start := time.Now()
+	preview, err := importers.ScanJSONL(*root, agent, func(scanned, total int, current string) {
+		// Carriage return rather than a new line per file: 567 lines of
+		// progress is not progress, it is noise that hides the report.
+		// Every 5 keeps a terminal responsive without flooding it.
+		if scanned%5 != 0 && scanned != total {
+			return
+		}
+		elapsed := time.Since(start)
+		var eta string
+		if scanned > 3 {
+			remaining := time.Duration(float64(elapsed) / float64(scanned) * float64(total-scanned))
+			eta = fmt.Sprintf(", about %s left", remaining.Truncate(time.Second))
+		}
+		fmt.Fprintf(Out, "\r  %d/%d transcripts%s          ", scanned, total, eta)
+	})
+	fmt.Fprintln(Out)
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -408,8 +429,7 @@ func importTranscripts(ctx context.Context, args []string, defaultRoot, agent st
 }
 
 func printTranscriptPreview(p *importers.Preview, root string) {
-	fmt.Fprintf(Out, "Scanning %s\n\n", shorten(root))
-	fmt.Fprintf(Out, "  transcripts   %d\n", p.Files)
+	fmt.Fprintf(Out, "\n  transcripts   %d\n", p.Files)
 	fmt.Fprintf(Out, "  observations  %d\n", p.Observations)
 	if p.Skipped > 0 {
 		fmt.Fprintf(Out, "  skipped       %d (empty or unreadable)\n", p.Skipped)
