@@ -125,10 +125,13 @@
   /* --inv is 1/zoom, set by the camera. Scaling text and strokes by it keeps
      labels readable and lines hairline-thin at every zoom level, instead of
      the whole picture inflating together. */
-  #gcam { --inv: 1; }
-  #gcam line { stroke-width: calc(1px * var(--inv)); }
+  /* --ui is how much bigger this canvas is than the 900x560 baseline, so text
+     and strokes keep their apparent size as the graph grows. --inv is 1/zoom,
+     so they do not inflate when the camera moves in. */
+  #gcam { --inv: 1; --ui: 1; }
+  #gcam line { stroke-width: calc(1px * var(--ui) * var(--inv)); }
   .gt {
-    font-size: calc(9.5px * var(--inv));
+    font-size: calc(9.5px * var(--ui) * var(--inv));
     fill: var(--muted); font-family: var(--mono); pointer-events: none;
   }
   #gsvg { touch-action: none; }
@@ -1136,14 +1139,29 @@
     var svg = el("gsvg");
     if (!svg) return;
 
-    var W = 900, H = 560;
+    // The canvas grows with the graph instead of every project being squeezed
+    // into one fixed rectangle.
+    //
+    // 750 nodes in 900x560 leaves about 26px of space each, which is barely
+    // more than a node's own diameter -- so the layout cannot separate them,
+    // the centre becomes a solid mass and the overflow pins against the clamp
+    // walls in visible corner clumps. Budgeting ~2200px2 per node and letting
+    // the viewBox follow gives the same picture room to breathe; it is then
+    // scaled to fit the panel, and the camera added alongside this is what
+    // makes the detail reachable again.
+    var area = Math.max(900 * 560, g.nodes.length * 2200);
+    var W = Math.round(Math.sqrt(area * 1.6));   // 1.6:1, close to the panel
+    var H = Math.round(area / W);
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+
     var nodes = g.nodes.map(function (n, i) {
       // Seeded on a circle rather than at random, so the same corpus lays out
       // the same way twice and the picture is comparable between visits.
       var a = (i / g.nodes.length) * Math.PI * 2;
       return {
         id: n.id, label: n.label, kind: n.kind, weight: n.weight || 1,
-        x: W / 2 + Math.cos(a) * 200, y: H / 2 + Math.sin(a) * 180, vx: 0, vy: 0
+        x: W / 2 + Math.cos(a) * (W * 0.22), y: H / 2 + Math.sin(a) * (H * 0.32),
+        vx: 0, vy: 0
       };
     });
     var index = {};
@@ -1163,6 +1181,13 @@
     // clamp walls in a ring. sqrt(area/n) is the spacing the box can honour.
     var rest = Math.max(26, Math.min(90, Math.sqrt((W * H) / Math.max(1, nodes.length))));
     var repel = 900 * (rest / 90);
+
+    // The canvas grows with the graph, and the browser scales the whole viewBox
+    // down to fit the panel -- so without this a node drawn at radius 5 in a
+    // 1700-wide canvas arrives on screen at under 2px. Sizes are multiplied by
+    // how much bigger this canvas is than the original, which holds their
+    // apparent size steady across a 23-file project and a 750-file one.
+    var ui = W / 900;
 
     // Fixed iteration count, run before the first paint. Animating the
     // settling looks impressive and means the layout is different every time
@@ -1228,7 +1253,7 @@
     var groups = folderGroups(nodes);
 
     nodes.forEach(function (n, i) {
-      var r = n.kind === "file" ? 5 + Math.min(9, Math.sqrt(n.weight) * 2) : 4;
+      var r = (n.kind === "file" ? 5 + Math.min(9, Math.sqrt(n.weight) * 2) : 4) * ui;
       var text = labelled[n.id];
       if (text && text.length > 26) text = "…" + text.slice(text.length - 25);
       parts.push('<g class="gn" data-i="' + i + '" data-label="' + esc(n.label) +
@@ -1247,7 +1272,7 @@
     // transform on the group rather than a rewrite of every coordinate. The
     // node positions stay in layout space, which keeps hit-testing, the
     // highlight pass and the detail panel unaware that a camera exists.
-    svg.innerHTML = '<g id="gcam">' + parts.join("") + "</g>";
+    svg.innerHTML = '<g id="gcam" style="--ui:' + ui.toFixed(3) + '">' + parts.join("") + "</g>";
     renderLegend(groups, nodes);
     wireCamera(svg, nodes, W, H);
 
