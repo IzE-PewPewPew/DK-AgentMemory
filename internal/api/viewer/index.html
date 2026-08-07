@@ -122,7 +122,16 @@
   /* Node fills are set per folder as an inline attribute, so hover targets the
      circle itself rather than a class that is no longer applied. */
   .gc-mem  { fill: var(--muted); opacity: .65; }
-  .gt { font-size: 9.5px; fill: var(--muted); font-family: var(--mono); pointer-events: none; }
+  /* --inv is 1/zoom, set by the camera. Scaling text and strokes by it keeps
+     labels readable and lines hairline-thin at every zoom level, instead of
+     the whole picture inflating together. */
+  #gcam { --inv: 1; }
+  #gcam line { stroke-width: calc(1px * var(--inv)); }
+  .gt {
+    font-size: calc(9.5px * var(--inv));
+    fill: var(--muted); font-family: var(--mono); pointer-events: none;
+  }
+  #gsvg { touch-action: none; }
   .gn:hover circle { stroke: var(--ink); stroke-width: 2; }
   .gn[data-kind="file"] { cursor: pointer; }
   .gk { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
@@ -591,9 +600,12 @@
 
           var head = '<div class="row">' +
             '<select id="gproj">' + opts + "</select>" +
-            '<button id="grebuild">Rebuild</button>' + focus +
+            '<input id="gfind" placeholder="find a file…" style="max-width:230px">' +
+            '<button id="grebuild">Rebuild</button>' +
+            '<button id="gfit">Reset view</button>' + focus +
             '<span id="gstatus" style="align-self:center;color:var(--muted)">' +
-            esc(status) + "</span></div>";
+            esc(status) + "</span></div>" +
+            '<div id="gfindout"></div>';
 
           if (!g.node_count) {
             // Say what the corpus actually holds. Sending the user to Learn --
@@ -618,7 +630,8 @@
             '<div class="card gpanel" id="gdetail"><p class="dim">Click a file to see what you ' +
             "change at the same time.</p></div></div>" +
             '<div id="glegend"></div>' +
-            '<div class="stats"><span>Two files are linked if you changed both in the same ' +
+            '<div class="stats"><span>Scroll to zoom · drag to move · click a file to see what ' +
+            "you change with it</span><span>Two files are linked if you changed both in the same " +
             "session, within a few steps of each other. This comes from your real edits, not " +
             "from the import lines in the code.</span></div>");
 
@@ -1230,8 +1243,13 @@
         "</g>");
     });
 
-    svg.innerHTML = parts.join("");
+    // Everything drawn goes inside one <g> so zoom and pan are a single
+    // transform on the group rather than a rewrite of every coordinate. The
+    // node positions stay in layout space, which keeps hit-testing, the
+    // highlight pass and the detail panel unaware that a camera exists.
+    svg.innerHTML = '<g id="gcam">' + parts.join("") + "</g>";
     renderLegend(groups, nodes);
+    wireCamera(svg, nodes, W, H);
 
     // Adjacency, built once, so selecting a file is a DOM opacity pass rather
     // than a refetch and a fresh 300-iteration layout. Re-running the physics
@@ -1306,7 +1324,144 @@
       if (grp.dataset.kind !== "file") return;
       selectNode(+grp.dataset.i);
     });
+
+    // Find a file by name and jump to it. With 683 nodes and 25 labels, the
+    // other 658 are anonymous dots — reachable only by luck without this.
+    var find = el("gfind"), out = el("gfindout");
+    if (find) {
+      find.addEventListener("input", function () {
+        var q = find.value.trim().toLowerCase();
+        if (!q) { out.innerHTML = ""; return; }
+        var hits = [];
+        for (var i = 0; i < nodes.length && hits.length < 8; i++) {
+          if (nodes[i].kind === "file" && nodes[i].label.toLowerCase().indexOf(q) >= 0) {
+            hits.push(i);
+          }
+        }
+        out.innerHTML = hits.length
+          ? '<div class="card" style="margin-bottom:9px">' + hits.map(function (i) {
+              return '<div><a href="#" class="hit" data-i="' + i + '">' +
+                esc(nodes[i].label) + "</a></div>";
+            }).join("") + "</div>"
+          : '<div class="card" style="margin-bottom:9px"><p class="dim">No file matches "' +
+            esc(find.value) + '".</p></div>';
+
+        Array.prototype.forEach.call(out.querySelectorAll("a.hit"), function (a) {
+          a.addEventListener("click", function (ev) {
+            ev.preventDefault();
+            var i = +a.dataset.i;
+            selectNode(i);
+            if (graphFocus) graphFocus(i);
+            out.innerHTML = "";
+            find.value = "";
+          });
+        });
+      });
+    }
+    if (el("gfit")) {
+      el("gfit").addEventListener("click", function () {
+        if (graphReset) graphReset();
+        clearSelection();
+      });
+    }
   }
+
+  // --- camera ---------------------------------------------------------------
+
+  // Zoom and pan, hand-written because the CSP forbids every library that
+  // would otherwise supply it.
+  //
+  // The camera is one transform on a wrapping <g>: translate(px, py) scale(k).
+  // Zooming keeps the point under the cursor fixed, which is what makes a
+  // wheel feel like a magnifier rather than a scrollbar. Solving for that:
+  // a layout point L maps to screen S = L*k + p, so holding S fixed while k
+  // changes to k' gives p' = S - L*k' = p + L*(k - k').
+  //
+  // Node coordinates are never touched, so the highlight pass, the detail
+  // panel and hit-testing all keep working in layout space and none of them
+  // needs to know the view moved.
+  function wireCamera(svg, nodes, W, H) {
+    var cam = svg.querySelector("#gcam");
+    if (!cam) return;
+    var k = 1, px = 0, py = 0;
+
+    function apply() {
+      cam.setAttribute("transform", "translate(" + px.toFixed(2) + "," + py.toFixed(2) +
+        ") scale(" + k.toFixed(4) + ")");
+      // Labels and strokes are scaled back so text stays legible and lines
+      // stay hairlines at any zoom, instead of ballooning with the picture.
+      cam.style.setProperty("--inv", (1 / k).toFixed(4));
+    }
+
+    // Screen pixels to layout units. The SVG is width:100% over a fixed
+    // viewBox, so the two differ by however much the browser stretched it.
+    function toLayout(ev) {
+      var r = svg.getBoundingClientRect();
+      var sx = (ev.clientX - r.left) * (W / r.width);
+      var sy = (ev.clientY - r.top) * (H / r.height);
+      return { x: (sx - px) / k, y: (sy - py) / k };
+    }
+
+    svg.addEventListener("wheel", function (ev) {
+      ev.preventDefault();
+      var L = toLayout(ev);
+      var next = Math.max(0.35, Math.min(8, k * (ev.deltaY < 0 ? 1.12 : 1 / 1.12)));
+      px += L.x * (k - next);
+      py += L.y * (k - next);
+      k = next;
+      apply();
+    }, { passive: false });
+
+    var dragging = false, lastX = 0, lastY = 0, moved = 0;
+    svg.addEventListener("pointerdown", function (ev) {
+      dragging = true; moved = 0;
+      lastX = ev.clientX; lastY = ev.clientY;
+      svg.setPointerCapture(ev.pointerId);
+      svg.style.cursor = "grabbing";
+    });
+    svg.addEventListener("pointermove", function (ev) {
+      if (!dragging) return;
+      var r = svg.getBoundingClientRect();
+      var dx = (ev.clientX - lastX) * (W / r.width);
+      var dy = (ev.clientY - lastY) * (H / r.height);
+      moved += Math.abs(dx) + Math.abs(dy);
+      px += dx; py += dy;
+      lastX = ev.clientX; lastY = ev.clientY;
+      apply();
+    });
+    function endDrag(ev) {
+      if (!dragging) return;
+      dragging = false;
+      svg.style.cursor = "grab";
+      try { svg.releasePointerCapture(ev.pointerId); } catch (e) {}
+    }
+    svg.addEventListener("pointerup", endDrag);
+    svg.addEventListener("pointercancel", endDrag);
+
+    // A pan that ends on a node must not also select it. Without this, moving
+    // the picture picks whatever happened to be under the finger when it
+    // stopped, which reads as the map choosing for you.
+    svg.addEventListener("click", function (ev) {
+      if (moved > 4) { ev.stopPropagation(); moved = 0; }
+    }, true);
+
+    svg.style.cursor = "grab";
+    apply();
+
+    // Centre the view on one node at a comfortable zoom. Used by search.
+    graphFocus = function (i) {
+      var n = nodes[i];
+      if (!n) return;
+      k = 2.2;
+      px = W / 2 - n.x * k;
+      py = H / 2 - n.y * k;
+      apply();
+    };
+    graphReset = function () { k = 1; px = 0; py = 0; apply(); };
+  }
+
+  var graphFocus = null;
+  var graphReset = null;
 
   // --- folders as colour ----------------------------------------------------
 
