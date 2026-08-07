@@ -88,6 +88,23 @@ incomplete, startup fails naming the missing key and both ways to supply it.
 
 Never in `config.yaml`. Use `*_api_key_env` pointing at an environment variable. `chmod 600` the file regardless.
 
+The variable has to be set in the environment of the process that *runs* the
+server, which is not always the one you exported it in. On Windows, `setx` and
+the System Properties dialog write to the user's registry and are picked up by
+shells opened afterwards — a shell that was already open, or a service started
+from one, will not see the value.
+
+A named-but-empty variable does not stop the server. Consolidation is switched
+off and the reason is logged at startup and returned by
+`POST /v1/admin/consolidate`:
+
+```
+level=WARN msg="consolidation disabled: LLM API key not in the environment" variable=DKM_LLM_API_KEY
+```
+
+If you instead see `401 Invalid token` from the provider, the key really was
+sent and really was rejected — check it is activated and still has quota.
+
 ## Client
 
 `~/.dkm/config.yaml`, written by `dkm login`. Mode 600.

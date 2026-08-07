@@ -106,6 +106,36 @@ Lessons marked `*` were synthesised by the pipeline rather than typed by anyone.
 Tier 3 needs at least five facts in a project before it will infer a rule, so
 run it after several conversations rather than after each one.
 
+## After a bulk import
+
+`dkm import` stores observations. It does not create memories — those come from
+consolidation, which is a separate, paid step. Between the two, `dkm projects`
+shows the truth:
+
+```
+PROJECT                SESSIONS  OBSERVATIONS  SUMMARISED  MEMORIES
+FiveMLauncher               234         21174        0/234         0
+```
+
+That is a successful import, not a failed one. To work through it:
+
+```bash
+dkm consolidate --tiers 1 --drain
+```
+
+Plain `dkm consolidate` takes the next 25 sessions, which is the right size for
+the scheduled job and the wrong size for a backlog of hundreds. `--drain` keeps
+going until the queue is empty; budget roughly half a minute of provider time
+per session and leave it running. Then run tiers 2 and 3, which turn those
+summaries into facts and facts into lessons:
+
+```bash
+dkm consolidate --tiers 2,3
+```
+
+The viewer's Learn tab has the same two buttons, and its Projects tab shows the
+`summarised / sessions` bar filling as the drain proceeds.
+
 ---
 
 ## Which hosts do this by themselves
