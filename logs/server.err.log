@@ -1,0 +1,48 @@
+time=2026-08-07T20:50:08.829+07:00 level=WARN msg="embedder is not ready; starting anyway with keyword-only search" service=dkm version=dev provider=local:BAAI/bge-small-en-v1.5 error="embedding sidecar unreachable at http://127.0.0.1:8091: Get \"http://127.0.0.1:8091/health\": dial tcp 127.0.0.1:8091: connectex: No connection could be made because the target machine actively refused it."
+time=2026-08-07T20:50:08.831+07:00 level=INFO msg=starting service=dkm version=dev version=dev config=config.yaml embedder=local:BAAI/bge-small-en-v1.5 consolidation=true
+time=2026-08-07T20:50:08.831+07:00 level=INFO msg=listening service=dkm version=dev bind=127.0.0.1:8090 public_url=http://localhost:8090 viewer=/viewer/ version=dev
+time=2026-08-07T20:50:08.831+07:00 level=INFO msg="consolidation enabled" service=dkm version=dev provider=openai:kimi-k3 tier1_interval=15m0s tier2_cron="0 2 * * *" tier3_cron="0 3 * * 0"
+time=2026-08-07T20:50:09.419+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7T20BW4R6HGWRTCB949BA method=GET path=/v1/healthz status=401 bytes=156 duration_ms=0 ip=127.0.0.1
+time=2026-08-07T20:50:09.667+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7T26M243ZC0ZM027KXJ4K method=GET path=/viewer/ status=200 bytes=87333 duration_ms=46 ip=127.0.0.1
+time=2026-08-07T20:50:10.064+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7T2MBRDQ8RR6X17BXJ55T method=GET path=/v1/sessions status=200 bytes=54054 duration_ms=5 ip=127.0.0.1
+time=2026-08-07T20:50:10.071+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7T2MBRDQ8RR6X17BXJ55W method=GET path=/v1/progress status=200 bytes=127 duration_ms=12 ip=127.0.0.1
+time=2026-08-07T20:50:10.076+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7T2MBRDQ8RR6X17BXJ55V method=GET path=/v1/healthz status=200 bytes=648 duration_ms=16 ip=127.0.0.1
+time=2026-08-07T20:50:19.945+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7TC94X56EK1M0H48X9VXD method=GET path=/v1/lessons status=200 bytes=1988 duration_ms=5 ip=127.0.0.1
+time=2026-08-07T20:50:30.466+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7T21YMA0VB61C9G3QEMX7 method=GET path=/v1/events status=200 bytes=45 duration_ms=20996 ip=127.0.0.1
+time=2026-08-07T20:50:30.467+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7T1M6ACEZ5P88FWGHG45H method=GET path=/v1/events status=200 bytes=45 duration_ms=21436 ip=127.0.0.1
+time=2026-08-07T20:50:30.477+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7TPJ3H57KVEHH24GMQSFF method=GET path=/v1/healthz status=200 bytes=649 duration_ms=9 ip=127.0.0.1
+time=2026-08-07T20:50:30.482+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7TPJG92CA3XG01H1VTMB1 method=GET path=/v1/progress status=200 bytes=127 duration_ms=2 ip=127.0.0.1
+time=2026-08-07T20:50:30.489+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7TPJMY2Z9T6VD5DX2PF1H method=GET path=/v1/healthz status=200 bytes=649 duration_ms=5 ip=127.0.0.1
+time=2026-08-07T20:50:30.496+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7TPJTP20MFP7FJ5V9XDAG method=GET path=/v1/healthz status=200 bytes=649 duration_ms=5 ip=127.0.0.1
+time=2026-08-07T20:50:30.499+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7TPK1GHGY8YK6YKSJG2C5 method=GET path=/v1/progress status=200 bytes=127 duration_ms=2 ip=127.0.0.1
+time=2026-08-07T20:50:30.502+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7TPK4GP4734GJ1AAFXTK2 method=GET path=/v1/progress status=200 bytes=127 duration_ms=1 ip=127.0.0.1
+time=2026-08-07T20:50:30.510+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7TPK72EGB8E5DXFD8CXQ8 method=GET path=/v1/healthz status=200 bytes=649 duration_ms=6 ip=127.0.0.1
+time=2026-08-07T20:50:30.518+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7TPKGKEQVX0AK238M9QQQ method=GET path=/v1/healthz status=200 bytes=649 duration_ms=6 ip=127.0.0.1
+time=2026-08-07T20:50:30.527+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7TPKRSSZ2ZNEDWNE3031J method=GET path=/v1/healthz status=200 bytes=650 duration_ms=7 ip=127.0.0.1
+time=2026-08-07T20:50:30.531+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7TPM18M7B043F47Q7A1V1 method=GET path=/v1/progress status=200 bytes=127 duration_ms=2 ip=127.0.0.1
+time=2026-08-07T20:50:30.542+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7TPMA09VDWK1YJ5M31Z29 method=GET path=/v1/progress status=200 bytes=127 duration_ms=3 ip=127.0.0.1
+time=2026-08-07T20:50:30.544+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7TPMF9NH1GA35GK9YBZVX method=GET path=/v1/progress status=200 bytes=127 duration_ms=1 ip=127.0.0.1
+time=2026-08-07T20:51:30.467+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7TPMHAM0Y65QZWNAFJYFM method=GET path=/v1/events status=200 bytes=71 duration_ms=59921 ip=127.0.0.1
+time=2026-08-07T20:51:30.470+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7WH54CXDRT17DD44PWJST method=GET path=/v1/events status=200 bytes=45 duration_ms=1 ip=127.0.0.1
+time=2026-08-07T20:51:30.479+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7WH5623MSYRRTNY32KQYQ method=GET path=/v1/healthz status=200 bytes=651 duration_ms=9 ip=127.0.0.1
+time=2026-08-07T20:51:30.485+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7WH5H04PJ05Z9MCTHQ569 method=GET path=/v1/progress status=200 bytes=127 duration_ms=4 ip=127.0.0.1
+time=2026-08-07T20:51:30.491+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7WH5NBVWMDRY2ZGE357MX method=GET path=/v1/healthz status=200 bytes=651 duration_ms=6 ip=127.0.0.1
+time=2026-08-07T20:51:30.494+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7WH5WZE9HJN0JP6EDR57R method=GET path=/v1/progress status=200 bytes=127 duration_ms=1 ip=127.0.0.1
+time=2026-08-07T20:52:30.466+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7WH5Z1F49PYESWQ6MXHYM method=GET path=/v1/events status=200 bytes=71 duration_ms=59971 ip=127.0.0.1
+time=2026-08-07T20:52:30.469+07:00 level=ERROR msg="request failed" service=dkm version=dev request_id=01KZE7YBR3ZC8AZE09NDAW0QTP status=500 code=internal method=GET path=/v1/events error="internal: internal error: context canceled"
+time=2026-08-07T20:52:30.470+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7YBR3ZC8AZE09NDAW0QTP method=GET path=/v1/events status=500 bytes=140 duration_ms=3 ip=127.0.0.1
+time=2026-08-07T20:52:30.479+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7YBR5R6WR93WTKZ2BBE8W method=GET path=/v1/healthz status=200 bytes=651 duration_ms=10 ip=127.0.0.1
+time=2026-08-07T20:52:30.484+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7YBRHVQKA8F4D42RQER9P method=GET path=/v1/progress status=200 bytes=127 duration_ms=3 ip=127.0.0.1
+time=2026-08-07T20:53:30.466+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE7YBRNGRNX05MDNPA3HKTS method=GET path=/v1/events status=200 bytes=71 duration_ms=59980 ip=127.0.0.1
+time=2026-08-07T20:53:30.468+07:00 level=ERROR msg="request failed" service=dkm version=dev request_id=01KZE806B39QS9C3G5TJA8JBQD status=500 code=internal method=GET path=/v1/events error="internal: internal error: context canceled"
+time=2026-08-07T20:53:30.468+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE806B39QS9C3G5TJA8JBQD method=GET path=/v1/events status=500 bytes=140 duration_ms=0 ip=127.0.0.1
+time=2026-08-07T20:53:30.475+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE806B4CX4HPXBGX1PZ5K6S method=GET path=/v1/healthz status=200 bytes=651 duration_ms=6 ip=127.0.0.1
+time=2026-08-07T20:53:30.481+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE806BCCRQV8BPA4EX50NVE method=GET path=/v1/progress status=200 bytes=127 duration_ms=4 ip=127.0.0.1
+time=2026-08-07T20:54:30.467+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE806BJ2ZTYETZ4YEX0S4TH method=GET path=/v1/events status=200 bytes=71 duration_ms=59985 ip=127.0.0.1
+time=2026-08-07T20:54:30.470+07:00 level=ERROR msg="request failed" service=dkm version=dev request_id=01KZE820Y4P6196N8QPCJB4SGG status=500 code=internal method=GET path=/v1/events error="internal: internal error: timeout: context already done: context canceled"
+time=2026-08-07T20:54:30.470+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE820Y4P6196N8QPCJB4SGG method=GET path=/v1/events status=500 bytes=140 duration_ms=1 ip=127.0.0.1
+time=2026-08-07T20:54:30.478+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE820Y6TPX2BV9P9FPT3ZDZ method=GET path=/v1/healthz status=200 bytes=652 duration_ms=8 ip=127.0.0.1
+time=2026-08-07T20:54:30.484+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE820YG1BJFQDKGBP6AY1BB method=GET path=/v1/progress status=200 bytes=127 duration_ms=4 ip=127.0.0.1
+time=2026-08-07T20:55:30.467+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE820YNB7B6A26HTCHPCMT5 method=GET path=/v1/events status=200 bytes=71 duration_ms=59982 ip=127.0.0.1
+time=2026-08-07T20:55:30.475+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE83VH4QPJAQ2AF21YG6YTG method=GET path=/v1/healthz status=200 bytes=651 duration_ms=6 ip=127.0.0.1
+time=2026-08-07T20:55:30.480+07:00 level=INFO msg=request service=dkm version=dev request_id=01KZE83VHDNAFDJXW8ZZ0XF7MF method=GET path=/v1/progress status=200 bytes=127 duration_ms=2 ip=127.0.0.1
