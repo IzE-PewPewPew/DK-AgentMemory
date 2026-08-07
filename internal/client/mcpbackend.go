@@ -22,15 +22,44 @@ import (
 // flight should get an answer rather than an error.
 type MCPBackend struct {
 	client *Client
-	// defaultProject is resolved once at startup from the directory the host
-	// launched the process in. Agents frequently omit the project argument, and
-	// falling back to "everything" quietly makes every search cross-project.
+	// defaultProject scopes calls that omit the project argument, which agents
+	// frequently do. Empty means "everything visible".
+	//
+	// Only set from a project identity that is actually meaningful -- a git
+	// remote, an explicit config value, a .dkm/project file, or DKM_PROJECT.
+	// NOT from a folder name.
+	//
+	// A folder name looks like a project identity and is not one here. A host
+	// app launches this process from wherever it happens to be: Claude Desktop
+	// starts it in the user's home directory, so the identity resolved to
+	// "ahgua", every lookup was scoped to a project that has never existed, and
+	// every tool returned zero results while reporting success. Verified: the
+	// same binary answering from the repository returned three lessons and from
+	// the home directory returned none.
+	//
+	// Falling back to everything is the safer wrong answer. Too broad is
+	// visible and correctable by passing a project; too narrow is indisting-
+	// uishable from an empty corpus.
 	defaultProject string
 }
 
 // NewMCPBackend builds the client-side MCP backend.
 func NewMCPBackend(c *Client, dir string) *MCPBackend {
-	return &MCPBackend{client: c, defaultProject: c.Project(dir).ID}
+	b := &MCPBackend{client: c}
+	if p := c.Project(dir); trustedProjectSource(p.Source) {
+		b.defaultProject = p.ID
+	}
+	return b
+}
+
+// trustedProjectSource reports whether an identity is stable enough to scope
+// every unqualified lookup to it.
+func trustedProjectSource(s Source) bool {
+	switch s {
+	case SourceRemote, SourceConfig, SourceFile, SourceEnv:
+		return true
+	}
+	return false
 }
 
 // Call dispatches one tool.
