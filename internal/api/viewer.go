@@ -39,8 +39,14 @@ func viewerHandler() http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
 
+		// StripPrefix leaves an empty path for the mount root. It must become
+		// "/" and not "index.html": http.FileServer canonically redirects any
+		// path ending in /index.html back to "./", so naming the file directly
+		// bounces /viewer/ to itself forever. Asking for the directory lets the
+		// FileServer find index.html on its own, which is the one spelling that
+		// terminates.
 		if r.URL.Path == "" {
-			r.URL.Path = "index.html"
+			r.URL.Path = "/"
 		}
 		files.ServeHTTP(w, r)
 	})
