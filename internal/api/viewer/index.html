@@ -1285,11 +1285,24 @@
     // apparent size steady across a 23-file project and a 750-file one.
     var ui = W / 900;
 
-    // Fixed iteration count, run before the first paint. Animating the
-    // settling looks impressive and means the layout is different every time
-    // you glance at it.
-    for (var step = 0; step < 300; step++) {
-      var k = 1 - step / 300;
+    // The layout is 300 iterations of an all-pairs loop -- at 750 nodes that
+    // is 84 million pair comparisons, measured at 595ms. Run in one go, as it
+    // used to be, that is 595ms of completely frozen tab before anything
+    // appears, every single time the Map is opened: no scroll, no tab switch,
+    // no cursor, and no explanation.
+    //
+    // It is now sliced across animation frames with a 12ms budget each, so the
+    // browser keeps painting and the status line counts up. The result is
+    // identical -- same fixed 300 iterations, same seeded start, same
+    // deterministic picture -- it simply stops holding the main thread while
+    // it gets there.
+    var totalSteps = 300;
+    var step = 0;
+    var status = el("gstatus");
+    var statusText = status ? status.textContent : "";
+
+    function iterate() {
+      var k = 1 - step / totalSteps;
       for (var i = 0; i < nodes.length; i++) {
         for (var j = i + 1; j < nodes.length; j++) {
           var a = nodes[i], b = nodes[j];
@@ -1319,8 +1332,50 @@
         n.x = Math.max(30, Math.min(W - 30, n.x));
         n.y = Math.max(24, Math.min(H - 24, n.y));
       });
+      step++;
     }
 
+    // 12ms per slice, yielded through setTimeout rather than
+    // requestAnimationFrame.
+    //
+    // rAF is for work that must be synchronised with painting, and browsers
+    // stop delivering it entirely while a tab is in the background. This is a
+    // computation, not an animation: scheduled on rAF it would silently stall
+    // the moment the user looked at another tab and resume only when they came
+    // back -- observed exactly that way. setTimeout keeps running, and yielding
+    // between slices is what removes the freeze either way.
+    function slice() {
+      // Slicing only buys something while somebody is looking at it. In a
+      // hidden tab browsers clamp timers to about one a second and eventually
+      // stop delivering them at all -- observed here stalling at 93% and never
+      // finishing, so the user returns to a frozen percentage. There is no
+      // responsiveness to protect in a tab nobody is watching, so finish in
+      // one pass instead.
+      if (document.hidden) {
+        while (step < totalSteps) iterate();
+      } else {
+        var t0 = performance.now();
+        while (step < totalSteps && performance.now() - t0 < 12) iterate();
+      }
+
+      if (step < totalSteps) {
+        if (status) {
+          status.textContent = "placing " + num(nodes.length) + " files… " +
+            Math.round((step / totalSteps) * 100) + "%";
+        }
+        setTimeout(slice, 0);
+        return;
+      }
+      if (status) status.textContent = statusText;
+      render();
+    }
+
+    // A small graph settles inside one slice, so it never shows the counter --
+    // it simply appears, exactly as before.
+    slice();
+    return;
+
+    function render() {
     var maxW = links.reduce(function (m, l) { return Math.max(m, l.w); }, 1);
     // Edge alpha scaled by density. Constants tuned when a graph was twenty
     // nodes make 3,657 links a grey wash on the biggest project -- the one with
@@ -1540,6 +1595,7 @@
         clearSelection();
       });
     }
+    }   // end render()
   }
 
   // --- camera ---------------------------------------------------------------
