@@ -63,6 +63,20 @@
   .tag.team { border-color: var(--accent); }
   .empty { color: var(--muted); padding: 32px 0; text-align: center; }
   .dim { color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+  textarea, input[type=text], input:not([type]) {
+    width: 100%; background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 7px; padding: 8px 11px;
+    font: inherit; font-size: 13px;
+  }
+  textarea { resize: vertical; min-height: 72px; }
+  .chks { gap: 14px; flex-wrap: wrap; }
+  .chk { display: flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+  .promptbox {
+    margin: 0; padding: 13px 15px; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 8px;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.55;
+    white-space: pre-wrap; overflow-wrap: anywhere; max-height: 60vh; overflow-y: auto;
+  }
   .bar {
     display: block; width: 84px; height: 5px; border-radius: 3px;
     background: var(--line); overflow: hidden; margin-bottom: 3px;
@@ -121,6 +135,7 @@
       <button data-tab="projects">Projects</button>
       <button data-tab="graph">Graph</button>
       <button data-tab="learn">Learn</button>
+      <button data-tab="compose">Compose</button>
       <button data-tab="search">Search</button>
     </nav>
 
@@ -378,6 +393,46 @@
       });
     },
 
+    // Compose: a rough description in, a finished prompt out, grounded in the
+    // memories this service already holds for the project.
+    compose: function () {
+      return api("/v1/projects").then(function (pj) {
+        var projects = (pj.projects || []).filter(function (p) { return p.project; });
+        var opts = ['<option value="">(no project — no grounding)</option>'].concat(
+          projects.map(function (p) {
+            return '<option value="' + esc(p.project) + '"' +
+              (p.project === composeState.project ? " selected" : "") + ">" +
+              esc(p.project) + "</option>";
+          })).join("");
+
+        var boxes = COMPOSE_FOCUS.map(function (f) {
+          return '<label class="chk"><input type="checkbox" value="' + f.k + '"' +
+            (composeState.focus[f.k] ? " checked" : "") + "> " + esc(f.label) + "</label>";
+        }).join("");
+
+        render(
+          '<div class="card"><h3>Compose a prompt</h3>' +
+          "<p>Describe what you want to build, in any English. This writes a finished " +
+          "prompt for a coding model, using what has been learned about the project you " +
+          "pick — so it carries your own conventions instead of generic advice.</p>" +
+          '<textarea id="cptask" rows="4" placeholder="settings page for my launcher where user can change download folder, set max bandwidth, toggle auto update">' +
+          esc(composeState.task) + "</textarea>" +
+          '<div class="row" style="margin-top:9px">' +
+          '<select id="cpproj">' + opts + "</select>" +
+          '<input id="cptarget" placeholder="Claude Opus 5" value="' + esc(composeState.target) + '">' +
+          "</div>" +
+          '<div class="row chks" style="margin-top:9px">' + boxes + "</div>" +
+          '<div class="row" style="margin-top:12px">' +
+          '<button id="cpgo">Generate prompt</button>' +
+          '<button id="cpprev">What would it use?</button>' +
+          '<span id="cpstatus" style="align-self:center;color:var(--muted)"></span>' +
+          "</div></div>" +
+          '<div id="cpout"></div>');
+
+        wireCompose();
+      });
+    },
+
     learn: function () {
       return api("/v1/activity").then(function (act) {
         var c = act.consolidation || {};
@@ -484,6 +539,160 @@
   var graphProject = "";
   var graphSeed = "";       // when set, show only this file's neighbourhood
   var graphDepth = 2;
+
+  var COMPOSE_FOCUS = [
+    { k: "flow", label: "flow" },
+    { k: "structure", label: "structure" },
+    { k: "coding", label: "coding" },
+    { k: "ux", label: "UX / UI" },
+    { k: "security", label: "security" }
+  ];
+
+  // Kept outside the render so a redraw does not eat what is being typed.
+  var composeState = { task: "", project: "", target: "", focus: {}, result: null };
+
+  function composeBody() {
+    var body = { description: composeState.task, project: composeState.project };
+    if (composeState.target) body.target = composeState.target;
+    var em = COMPOSE_FOCUS.map(function (f) { return f.k; })
+      .filter(function (k) { return composeState.focus[k]; });
+    if (em.length) body.emphases = em;
+    return body;
+  }
+
+  function readComposeInputs() {
+    var t = el("cptask"), p = el("cpproj"), g = el("cptarget");
+    if (t) composeState.task = t.value;
+    if (p) composeState.project = p.value;
+    if (g) composeState.target = g.value.trim();
+    composeState.focus = {};
+    Array.prototype.forEach.call(document.querySelectorAll(".chks input"), function (b) {
+      if (b.checked) composeState.focus[b.value] = true;
+    });
+  }
+
+  function wireCompose() {
+    var out = el("cpout");
+    if (composeState.result) out.innerHTML = composeState.result;
+
+    var go = el("cpgo"), prev = el("cpprev"), status = el("cpstatus");
+
+    function busy(on, msg) {
+      if (go) go.disabled = on;
+      if (prev) prev.disabled = on;
+      status.textContent = on ? msg : "";
+    }
+
+    if (prev) {
+      prev.addEventListener("click", function () {
+        readComposeInputs();
+        if (!composeState.task.trim()) { status.textContent = "say what you want to build"; return; }
+        busy(true, "checking what is known…");
+        api("/v1/prompt/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(composeBody())
+        }).then(function (res) {
+          busy(false);
+          var ms = res.memories || [];
+          var html = '<div class="card"><h3>' +
+            (ms.length ? num(ms.length) + " memories would ground this prompt"
+                       : "Nothing in your corpus matches this yet") + "</h3>" +
+            (ms.length
+              ? '<div class="scroll"><table><thead><tr><th>Kind</th><th>Title</th><th>Score</th></tr></thead><tbody>' +
+                ms.map(function (m) {
+                  return '<tr><td><span class="tag ' + esc(m.kind) + '">' + esc(m.kind) +
+                    "</span></td><td>" + esc(m.title) + "</td><td>" +
+                    (m.score ? m.score.toFixed(3) : "—") + "</td></tr>";
+                }).join("") + "</tbody></table></div>"
+              : "<p>The prompt will still be written, but it will claim no conventions " +
+                "about this project rather than invent any.</p>") +
+            '<p style="margin-top:9px">Mode <code>' + esc(res.mode) + "</code> · about " +
+            num(res.estimated_input_tokens) + " input tokens. Nothing was sent to the provider.</p></div>";
+          composeState.result = html;
+          out.innerHTML = html;
+        }).catch(function (e) { busy(false); status.textContent = e.message; });
+      });
+    }
+
+    if (go) {
+      go.addEventListener("click", function () {
+        readComposeInputs();
+        if (!composeState.task.trim()) { status.textContent = "say what you want to build"; return; }
+        busy(true, "composing — one call to your provider, usually under a minute…");
+        api("/v1/prompt", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(composeBody())
+        }).then(function (res) {
+          busy(false);
+          if (!res.generated) {
+            out.innerHTML = '<div class="card"><h3>Not configured</h3><p>' +
+              esc(res.reason || "") + "</p><p>" + esc(res.fix || "") + "</p></div>";
+            return;
+          }
+          var ms = res.memories || [];
+          var cost = res.cost || {};
+          var html =
+            (res.understood
+              ? '<div class="card"><h3>Understood as</h3><p style="color:var(--accent)">' +
+                esc(res.understood) + "</p>" +
+                "<p>If that is not what you meant, edit the description and generate again — " +
+                "it is cheaper to correct here than after the code is written.</p></div>"
+              : "") +
+            '<div class="card"><h3>Your prompt</h3>' +
+            '<div class="row" style="margin-bottom:9px"><button id="cpcopy">Copy</button>' +
+            '<span class="dim" style="align-self:center">paste this into ' +
+            esc(composeState.target || "Claude") + "</span></div>" +
+            '<pre id="cptext" class="promptbox">' + esc(res.prompt) + "</pre></div>" +
+            (ms.length
+              ? '<div class="card"><h3>Grounded in ' + num(ms.length) + " of your own memories</h3>" +
+                "<p>These came from your sessions. If a constraint in the prompt looks wrong, " +
+                "it traces back to one of them.</p><div class=\"meta\">" +
+                ms.map(function (m) {
+                  return '<span class="tag ' + esc(m.kind) + '">' + esc(m.title) + "</span>";
+                }).join("") + "</div></div>"
+              : '<div class="card"><h3>Grounded in nothing</h3><p>' +
+                "No stored memory matched this task closely enough to use, so the prompt " +
+                "claims no conventions rather than inventing any. Consolidating more " +
+                "sessions will ground future prompts.</p></div>") +
+            '<div class="stats"><span>' + esc(res.provider || "") + "</span><span>" +
+            num(cost.input_tokens || 0) + " in / " + num(cost.output_tokens || 0) + " out" +
+            (cost.includes_reasoning ? " (output includes model thinking)" : "") + "</span></div>";
+
+          composeState.result = html;
+          out.innerHTML = html;
+
+          var copy = el("cpcopy");
+          if (copy) {
+            copy.addEventListener("click", function () {
+              var text = el("cptext").textContent;
+              // navigator.clipboard needs a secure context, which a plain
+              // http://127.0.0.1 page is — but not http://<lan-ip>. Fall back
+              // to selecting the text so the button is never simply dead.
+              if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(function () {
+                  copy.textContent = "Copied";
+                  setTimeout(function () { copy.textContent = "Copy"; }, 1400);
+                }).catch(function () { selectText(el("cptext")); copy.textContent = "Press Ctrl+C"; });
+              } else {
+                selectText(el("cptext"));
+                copy.textContent = "Press Ctrl+C";
+              }
+            });
+          }
+        }).catch(function (e) { busy(false); status.textContent = e.message; });
+      });
+    }
+  }
+
+  function selectText(node) {
+    var range = document.createRange();
+    range.selectNodeContents(node);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
 
   // Path labels collide badly at project scale: the 300 heaviest files in one
   // project here share only 257 distinct basenames, with route.ts appearing 26
@@ -693,11 +902,15 @@
             // Any change refreshes the current view. The payload is not trusted
             // to patch the DOM; it only signals that a refetch is worthwhile.
             //
-            // The graph is exempt. A refresh re-runs the whole force layout, so
-            // the picture moves under the cursor mid-look — and it destroys the
-            // open project dropdown and any focus the user had clicked into.
-            // The graph only changes on an explicit rebuild anyway.
-            if (views[tab] && tab !== "graph") views[tab]().catch(function () {});
+            // Graph and Compose are exempt. A refresh replaces the whole panel:
+            // for the graph that re-runs the force layout so the picture moves
+            // under the cursor, and for Compose it erases the description
+            // mid-sentence — a background agent saving one memory would wipe
+            // what the user was typing. Neither changes without an explicit
+            // action anyway.
+            if (views[tab] && tab !== "graph" && tab !== "compose") {
+              views[tab]().catch(function () {});
+            }
             loadStats();
           });
           return pump();

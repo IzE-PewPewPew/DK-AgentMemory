@@ -55,6 +55,7 @@ func commands() []command {
 		{"forget", "memory", "Delete a memory", "dkm forget <id> [--yes]", cmdForget},
 		{"supersede", "memory", "Mark a memory replaced by a newer one", "dkm supersede <old-id> <new-id>", cmdSupersede},
 		{"projects", "memory", "List projects with memory counts", "dkm projects", cmdProjects},
+		{"prompt", "memory", "Compose a prompt from a rough description, grounded in your memories", "dkm prompt \"settings page that saves the download folder\"", cmdPrompt},
 		{"consolidate", "memory", "Distil sessions into facts and lessons now", "dkm consolidate [--tiers 1,2,3]", cmdConsolidate},
 		{"activity", "memory", "Show what each connected tool has captured", "dkm activity", cmdActivity},
 		{"graph", "memory", "Show related entities for a project", "dkm graph [--project P] [--node F]", cmdGraph},

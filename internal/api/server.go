@@ -93,6 +93,23 @@ type Consolidator interface {
 	Provider() string
 	BatchSize() int
 	DisabledReason() string
+
+	// Complete runs one completion through the worker's configured provider.
+	//
+	// Routed through here rather than constructing a provider in this package
+	// so the call inherits the retry policy the worker already owns: five
+	// attempts with exponential backoff, Retry-After honoured, immediate
+	// surrender on a wrong key or an exhausted budget. That policy is not
+	// exported, and duplicating it would mean maintaining two.
+	Complete(ctx context.Context, system, user string) (Completion, error)
+}
+
+// Completion is one provider reply, with what it cost.
+type Completion struct {
+	Text         string
+	InputTokens  int
+	OutputTokens int
+	Estimated    bool
 }
 
 // New builds the server and registers every route.
@@ -197,6 +214,12 @@ func (s *Server) buildRoutes() []route {
 		// Sharing.
 		r("POST", "/v1/share/{id}", "sharing", "Promote a private memory to team visibility", authUser, s.handleShare),
 		r("GET", "/v1/feed", "sharing", "Recently shared team memories", authUser, s.handleFeed),
+
+		// Prompt composition. authUser, not authAdmin: it writes nothing, is
+		// scoped to the caller's own request, and is meant to be used daily.
+		// Cost is bounded by the rate limiter, which is the right place for it.
+		r("POST", "/v1/prompt", "prompt", "Generate a prompt from a rough description, grounded in this project's memories", authUser, s.handlePrompt),
+		r("POST", "/v1/prompt/preview", "prompt", "Show which memories would ground the prompt, without calling the LLM", authUser, s.handlePromptPreview),
 
 		// Projects.
 		r("GET", "/v1/projects", "projects", "Projects visible to the caller, with counts", authUser, s.handleProjects),

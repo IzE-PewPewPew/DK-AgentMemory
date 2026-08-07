@@ -136,6 +136,19 @@ func (a consolidatorAdapter) Provider() string       { return a.w.Provider() }
 func (a consolidatorAdapter) BatchSize() int         { return a.w.BatchSize() }
 func (a consolidatorAdapter) DisabledReason() string { return a.w.DisabledReason() }
 
+func (a consolidatorAdapter) Complete(ctx context.Context, system, user string) (api.Completion, error) {
+	resp, err := a.w.Complete(ctx, system, user)
+	if err != nil {
+		return api.Completion{}, err
+	}
+	return api.Completion{
+		Text:         resp.Text,
+		InputTokens:  resp.InputTokens,
+		OutputTokens: resp.OutputTokens,
+		Estimated:    resp.Estimated,
+	}, nil
+}
+
 func cmdMigrate(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
 	fs.SetOutput(Err)

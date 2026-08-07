@@ -163,6 +163,16 @@ func (w *Worker) Enabled() bool { return w.cfg.Consolidation.Enabled && w.llm !=
 // BatchSize is how many sessions one non-draining tier 1 run takes.
 func (w *Worker) BatchSize() int { return tier1Batch }
 
+// Complete runs one completion through the configured provider, with the
+// worker's retry policy. Used by features outside consolidation that need the
+// same provider and the same patience.
+func (w *Worker) Complete(ctx context.Context, system, user string) (*Response, error) {
+	if !w.Enabled() {
+		return nil, fmt.Errorf("%s", w.DisabledReason())
+	}
+	return completeWithRetry(ctx, w.llm, Request{System: system, Prompt: user})
+}
+
 // DisabledReason explains why consolidation is off, or "" when it is on.
 func (w *Worker) DisabledReason() string {
 	if w.Enabled() {
