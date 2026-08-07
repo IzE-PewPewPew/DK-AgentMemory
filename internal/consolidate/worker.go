@@ -40,6 +40,10 @@ type Worker struct {
 	llm      Provider
 	log      *slog.Logger
 
+	// reason explains why an enabled worker has no provider, so the operator
+	// is told which variable is empty rather than just "disabled".
+	reason string
+
 	mu      sync.Mutex
 	running map[string]bool
 }
@@ -55,6 +59,25 @@ func NewWorker(cfg *config.Config, st *store.Store, embedder embed.Embedder, log
 	}
 
 	if cfg.Consolidation.Enabled {
+		// A named but empty key variable is a configuration mistake, not a
+		// reason to refuse to serve. Leaving llm nil makes Enabled() false, so
+		// the admin route answers "consolidation is disabled" with the fix
+		// instead of the server sending an empty Bearer token and relaying a
+		// provider's 401 — which reads as "your key is wrong" when the key is
+		// fine and simply is not in this process's environment.
+		//
+		// Logged at warn, once, at startup: the operator configured this and
+		// expects it to work, so silence would be the wrong answer too.
+		if cfg.LLMAPIKey() == "" {
+			w.reason = fmt.Sprintf("consolidation.llm.api_key_env names %s, but that variable is empty in this process",
+				cfg.Consolidation.LLM.APIKeyEnv)
+			log.Warn("consolidation disabled: LLM API key not in the environment",
+				"variable", cfg.Consolidation.LLM.APIKeyEnv,
+				"hint", "export it in the shell that starts the server; on Windows a variable set with setx "+
+					"is not visible to shells that were already open")
+			return w, nil
+		}
+
 		llm, err := New(cfg)
 		if err != nil {
 			return nil, err
@@ -136,6 +159,20 @@ type RunReport struct {
 // Enabled reports whether consolidation can run at all.
 func (w *Worker) Enabled() bool { return w.cfg.Consolidation.Enabled && w.llm != nil }
 
+// BatchSize is how many sessions one non-draining tier 1 run takes.
+func (w *Worker) BatchSize() int { return tier1Batch }
+
+// DisabledReason explains why consolidation is off, or "" when it is on.
+func (w *Worker) DisabledReason() string {
+	if w.Enabled() {
+		return ""
+	}
+	if w.reason != "" {
+		return w.reason
+	}
+	return "consolidation.enabled is false"
+}
+
 // Provider names the configured LLM, for display.
 func (w *Worker) Provider() string {
 	if w.llm == nil {
@@ -154,7 +191,9 @@ func (w *Worker) Provider() string {
 // Tiers run in order because each feeds the next: summaries become facts,
 // facts become lessons. Running tier 3 alone on a fresh import produces nothing,
 // correctly, and saying so is better than appearing to do work.
-func (w *Worker) RunNow(ctx context.Context, tiers []int) (*RunReport, error) {
+//
+// With drain set, tier 1 works through the whole backlog rather than one batch.
+func (w *Worker) RunNow(ctx context.Context, tiers []int, drain bool) (*RunReport, error) {
 	if !w.Enabled() {
 		return nil, fmt.Errorf("consolidation is disabled; set consolidation.enabled and configure consolidation.llm")
 	}
@@ -176,7 +215,11 @@ func (w *Worker) RunNow(ctx context.Context, tiers []int) (*RunReport, error) {
 		switch tier {
 		case 1:
 			report.Tiers = append(report.Tiers, "session summaries")
-			err = w.tier1SessionSummaries(ctx)
+			if drain {
+				err = w.drainTier1(ctx)
+			} else {
+				err = w.tier1SessionSummaries(ctx)
+			}
 		case 2:
 			report.Tiers = append(report.Tiers, "fact extraction")
 			err = w.tier2ExtractFacts(ctx)
@@ -192,8 +235,14 @@ func (w *Worker) RunNow(ctx context.Context, tiers []int) (*RunReport, error) {
 		}
 	}
 
-	// Totals come from the run records the tiers just wrote.
-	if runs, err := w.store.ListRuns(ctx, 50); err == nil {
+	// Totals come from the run records the tiers just wrote. A drain writes one
+	// per batch, so the window has to be wide enough to cover the ceiling —
+	// otherwise a long drain under-reports the work it just did.
+	window := 50
+	if drain {
+		window = 512
+	}
+	if runs, err := w.store.ListRuns(ctx, window); err == nil {
 		for _, r := range runs {
 			if r.StartedAt.Before(before) {
 				continue
@@ -298,15 +347,30 @@ func (w *Worker) guard(ctx context.Context, name string, fn func(context.Context
 
 // --- tier 1: session summaries ---------------------------------------------
 
+// tier1Batch is how many sessions one scheduled tick summarises.
+//
+// Deliberately small: the tick fires on an interval forever, and an unbounded
+// batch would turn a quiet server into a large bill the first time someone
+// imports a year of history. On-demand runs pass through drainTier1 instead,
+// where the operator has asked for the whole backlog.
+const tier1Batch = 25
+
 func (w *Worker) tier1SessionSummaries(ctx context.Context) error {
-	sessions, err := w.store.SessionsAwaitingSummary(ctx, 25)
+	_, err := w.tier1Once(ctx)
+	return err
+}
+
+// tier1Once summarises one batch and reports how many sessions it claimed, so
+// a drain loop can tell "backlog cleared" from "batch full, go again".
+func (w *Worker) tier1Once(ctx context.Context) (int, error) {
+	sessions, err := w.store.SessionsAwaitingSummary(ctx, tier1Batch)
 	if err != nil || len(sessions) == 0 {
-		return err
+		return 0, err
 	}
 
 	runID, err := w.store.StartRun(ctx, 1, "", "")
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	var produced, inTok, outTok int
@@ -368,7 +432,62 @@ func (w *Worker) tier1SessionSummaries(ctx context.Context) error {
 			"sessions", len(sessions), "summaries", produced,
 			"input_tokens", inTok, "output_tokens", outTok)
 	}
-	return w.store.FinishRun(ctx, runID, len(sessions), produced, 0, inTok, outTok, runErr)
+	if err := w.store.FinishRun(ctx, runID, len(sessions), produced, 0, inTok, outTok, runErr); err != nil {
+		return len(sessions), err
+	}
+	return len(sessions), runErr
+}
+
+// drainTier1 keeps summarising until the backlog is empty.
+//
+// The scheduled tick takes 25 at a time on purpose. On demand that is the wrong
+// shape: an operator who has just imported 568 sessions and pressed the button
+// wants them summarised, not to press it twenty more times and be told each
+// time that it worked.
+//
+// Bounded by maxDrainBatches so a bug that fails to mark sessions summarised
+// costs a bounded number of API calls rather than an unbounded bill, and it
+// stops on the first error — a dead endpoint or an exhausted quota fails the
+// same way on attempt two as on attempt one.
+func (w *Worker) drainTier1(ctx context.Context) error {
+	batches, err := drainLoop(ctx, tier1Batch, maxDrainBatches, w.tier1Once)
+	if err != nil {
+		return err
+	}
+	if batches == maxDrainBatches {
+		w.log.Warn("tier 1 drain hit its batch ceiling; run again to continue",
+			"batches", batches, "sessions", batches*tier1Batch)
+	}
+	return nil
+}
+
+// maxDrainBatches bounds a single drain. See drainLoop.
+const maxDrainBatches = 200
+
+// drainLoop calls run until it returns a partial batch, and reports how many
+// batches it ran.
+//
+// Split out from drainTier1 because the termination condition is the part worth
+// testing and the worker itself needs a live database to construct.
+//
+// A short batch means the queue is empty: the query asked for `batch` and got
+// fewer. A full batch means there is probably more, so go again. The ceiling
+// keeps a bug that fails to mark sessions done — which would return a full
+// batch forever — to a bounded number of API calls rather than an open bill.
+func drainLoop(ctx context.Context, batch, max int, run func(context.Context) (int, error)) (int, error) {
+	for i := 1; i <= max; i++ {
+		if err := ctx.Err(); err != nil {
+			return i - 1, err
+		}
+		n, err := run(ctx)
+		if err != nil {
+			return i, err
+		}
+		if n < batch {
+			return i, nil
+		}
+	}
+	return max, nil
 }
 
 const tier1System = `You summarise one coding session for a memory system that other AI agents will read later.

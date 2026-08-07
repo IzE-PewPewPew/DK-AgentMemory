@@ -363,8 +363,12 @@
             "Raw sessions become summaries, summaries become facts, and recurring facts become lessons. " +
             "This calls your LLM provider and costs tokens.</p>" +
             '<div class="row" style="margin-top:12px">' +
-            '<button id="runlearn">Run consolidation now</button>' +
-            '<span id="learnstatus" style="align-self:center;color:var(--muted)"></span></div>';
+            '<button id="runlearn">Run one batch</button>' +
+            '<button id="drainlearn">Consolidate everything</button>' +
+            '<span id="learnstatus" style="align-self:center;color:var(--muted)"></span></div>' +
+            '<p style="margin-top:9px">One batch takes the next ' + (c.batch || 25) + ' sessions. ' +
+            "Consolidating everything works through the whole backlog in one go — the right " +
+            "choice straight after an import, and it can run for hours.</p>";
         } else {
           head += "<p>Disabled. Memories are stored and searchable, but nothing is ever distilled " +
             "into lessons. Set <code>consolidation.enabled</code>, configure " +
@@ -401,15 +405,18 @@
 
           render(body);
 
-          var btn = el("runlearn");
-          if (btn) {
+          function wireRun(id, drain, note) {
+            var btn = el(id);
+            if (!btn) return;
             btn.addEventListener("click", function () {
-              btn.disabled = true;
-              el("learnstatus").textContent = "running — this may take a minute…";
+              var one = el("runlearn"), all = el("drainlearn");
+              if (one) one.disabled = true;
+              if (all) all.disabled = true;
+              el("learnstatus").textContent = note;
               api("/v1/admin/consolidate", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: "{}"
+                body: JSON.stringify(drain ? { drain: true } : {})
               }).then(function (res) {
                 var r = (res && res.report) || {};
                 el("learnstatus").textContent = res.ran
@@ -419,10 +426,13 @@
                 setTimeout(function () { show("learn"); }, 1500);
               }).catch(function (e) {
                 el("learnstatus").textContent = e.message;
-                btn.disabled = false;
+                if (one) one.disabled = false;
+                if (all) all.disabled = false;
               });
             });
           }
+          wireRun("runlearn", false, "running — this may take a minute…");
+          wireRun("drainlearn", true, "consolidating the whole backlog — this can run for hours, leave the tab open…");
         }).catch(function (e) {
           // The runs and trigger endpoints are admin-only. A non-admin key
           // should see the explanation rather than a bare error.

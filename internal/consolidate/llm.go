@@ -196,6 +196,15 @@ type openAI struct{ common }
 func (o *openAI) Name() string { return "openai:" + o.model }
 
 func (o *openAI) Complete(ctx context.Context, req Request) (*Response, error) {
+	// Same guard the anthropic and google providers have. Without it an unset
+	// environment variable becomes an empty Bearer token, and the operator's
+	// first clue is a 401 from a third party — which reads as "your key is
+	// wrong" when the key is fine and simply was not in the server's
+	// environment. Say which variable, in the language of the config file.
+	if o.apiKey == "" {
+		return nil, fmt.Errorf("no API key: set the environment variable named by consolidation.llm.api_key_env")
+	}
+
 	messages := []any{}
 	if req.System != "" {
 		messages = append(messages, map[string]any{"role": "system", "content": req.System})

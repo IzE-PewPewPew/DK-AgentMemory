@@ -88,9 +88,11 @@ type Options struct {
 // imports internal/store and internal/embed, and the API importing it directly
 // would make the dependency graph a cycle waiting to happen.
 type Consolidator interface {
-	RunNow(ctx context.Context, tiers []int) (any, error)
+	RunNow(ctx context.Context, tiers []int, drain bool) (any, error)
 	Enabled() bool
 	Provider() string
+	BatchSize() int
+	DisabledReason() string
 }
 
 // New builds the server and registers every route.

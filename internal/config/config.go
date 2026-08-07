@@ -446,6 +446,15 @@ func (c *Config) Validate() error {
 		if c.Consolidation.LLM.Provider == "openai-compatible" && c.Consolidation.LLM.BaseURL == "" {
 			return missing("consolidation.llm.base_url", "the openai-compatible provider needs the endpoint to talk to")
 		}
+		// The key is deliberately NOT required here. Consolidation is on by
+		// default, so demanding a credential at parse time would stop the
+		// server from starting for everyone who only wants memory storage —
+		// refusing to serve because an optional background job cannot run.
+		// The worker reports the missing key instead, and stays disabled.
+		if c.Consolidation.LLM.APIKeyEnv == "" {
+			return missing("consolidation.llm.api_key_env",
+				"the name of an environment variable holding the provider key; the key itself never goes in this file")
+		}
 		if c.Consolidation.LLM.MaxTokens < 1 {
 			return invalid("consolidation.llm.max_tokens", strconv.Itoa(c.Consolidation.LLM.MaxTokens), "it must be at least 1")
 		}

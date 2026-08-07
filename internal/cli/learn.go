@@ -15,6 +15,7 @@ func cmdConsolidate(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("consolidate", flag.ContinueOnError)
 	fs.SetOutput(Err)
 	tierList := fs.String("tiers", "", "comma-separated tiers to run: 1 summaries, 2 facts, 3 lessons. Default all three, in order.")
+	drain := fs.Bool("drain", false, "summarise every waiting session, not just the next batch of 25")
 	if _, err := parseFlags(fs, args); err != nil {
 		return 2
 	}
@@ -33,7 +34,11 @@ func cmdConsolidate(ctx context.Context, args []string) int {
 		return failErr(err)
 	}
 
-	fmt.Fprintln(Out, "Consolidating. This calls your LLM provider and may take a minute.")
+	if *drain {
+		fmt.Fprintln(Out, "Consolidating the whole backlog. This calls your LLM provider once per session and can take a while.")
+	} else {
+		fmt.Fprintln(Out, "Consolidating. This calls your LLM provider and may take a minute.")
+	}
 
 	var out struct {
 		Ran      bool   `json:"ran"`
@@ -57,12 +62,22 @@ func cmdConsolidate(ctx context.Context, args []string) int {
 	if len(tiers) > 0 {
 		body["tiers"] = tiers
 	}
+	if *drain {
+		body["drain"] = true
+	}
 
 	// An hour, not the default 30 seconds. How long this takes is decided by
 	// how many sessions are queued and how fast the LLM provider is, neither of
 	// which this client can predict. Ctrl-C still works, because the deadline
 	// hangs off the same context.
-	ctx, cancel := context.WithTimeout(ctx, time.Hour)
+	//
+	// A drain is one LLM call per waiting session, so its ceiling is hours, not
+	// minutes — timing out mid-drain would abandon work already paid for.
+	limit := time.Hour
+	if *drain {
+		limit = 12 * time.Hour
+	}
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 
 	if err := c.AdminLong(ctx, http.MethodPost, "/v1/admin/consolidate", body, &out); err != nil {

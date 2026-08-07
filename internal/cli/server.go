@@ -128,11 +128,13 @@ func cmdServe(ctx context.Context, args []string) int {
 // the boundary keeps the loss where it belongs.
 type consolidatorAdapter struct{ w *consolidate.Worker }
 
-func (a consolidatorAdapter) RunNow(ctx context.Context, tiers []int) (any, error) {
-	return a.w.RunNow(ctx, tiers)
+func (a consolidatorAdapter) RunNow(ctx context.Context, tiers []int, drain bool) (any, error) {
+	return a.w.RunNow(ctx, tiers, drain)
 }
-func (a consolidatorAdapter) Enabled() bool    { return a.w.Enabled() }
-func (a consolidatorAdapter) Provider() string { return a.w.Provider() }
+func (a consolidatorAdapter) Enabled() bool          { return a.w.Enabled() }
+func (a consolidatorAdapter) Provider() string       { return a.w.Provider() }
+func (a consolidatorAdapter) BatchSize() int         { return a.w.BatchSize() }
+func (a consolidatorAdapter) DisabledReason() string { return a.w.DisabledReason() }
 
 func cmdMigrate(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)

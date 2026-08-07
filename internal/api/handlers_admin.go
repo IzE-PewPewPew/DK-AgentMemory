@@ -175,6 +175,8 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) error {
 type consolidateRequest struct {
 	// Tiers to run, in order. Empty means all three.
 	Tiers []int `json:"tiers,omitempty"`
+	// Drain works tier 1 through the entire backlog instead of one batch.
+	Drain bool `json:"drain,omitempty"`
 }
 
 func (s *Server) handleConsolidate(w http.ResponseWriter, r *http.Request) error {
@@ -189,23 +191,30 @@ func (s *Server) handleConsolidate(w http.ResponseWriter, r *http.Request) error
 		// 200 with a reason, not 404 or 500. Nothing is broken — the feature is
 		// switched off, and the caller needs to be told which knob turns it on
 		// rather than left to guess whether the route exists.
+		reason := "consolidation is disabled"
+		if s.consolidator != nil {
+			if r := s.consolidator.DisabledReason(); r != "" {
+				reason = r
+			}
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ran":    false,
-			"reason": "consolidation is disabled",
+			"reason": reason,
 			"fix": "set consolidation.enabled: true, configure consolidation.llm, " +
-				"export the API key named by consolidation.llm.api_key_env, and restart",
+				"export the API key named by consolidation.llm.api_key_env in the shell that " +
+				"starts the server, and restart",
 		})
 		return nil
 	}
 
 	id := identityFrom(r.Context())
 	s.log.Info("consolidation requested", "by", id.UserID, "tiers", req.Tiers,
-		"provider", s.consolidator.Provider())
+		"drain", req.Drain, "provider", s.consolidator.Provider())
 
 	// Runs inline rather than in the background. An operator who pressed a
 	// button wants the result, including the failure — a 202 and a promise to
 	// look in the logs is how "I clicked it and nothing happened" starts.
-	report, err := s.consolidator.RunNow(r.Context(), req.Tiers)
+	report, err := s.consolidator.RunNow(r.Context(), req.Tiers, req.Drain)
 	if err != nil {
 		return &APIError{
 			Status: http.StatusServiceUnavailable, Code: CodeUnavailable,
@@ -214,7 +223,8 @@ func (s *Server) handleConsolidate(w http.ResponseWriter, r *http.Request) error
 		}
 	}
 
-	s.audit(r, id, "consolidate.run", s.consolidator.Provider(), map[string]any{"tiers": req.Tiers})
+	s.audit(r, id, "consolidate.run", s.consolidator.Provider(),
+		map[string]any{"tiers": req.Tiers, "drain": req.Drain})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ran":      true,
 		"provider": s.consolidator.Provider(),
@@ -234,6 +244,9 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) error {
 		consolidation = map[string]any{
 			"enabled":  s.consolidator.Enabled(),
 			"provider": s.consolidator.Provider(),
+			// So the viewer can name the batch size without hardcoding a copy
+			// of a constant that lives in another package.
+			"batch": s.consolidator.BatchSize(),
 		}
 	}
 
