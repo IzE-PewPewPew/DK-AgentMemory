@@ -381,16 +381,25 @@ func cmdProjects(ctx context.Context, args []string) int {
 		return 0
 	}
 
-	rows := [][]string{{"PROJECT", "MEMORIES", "SESSIONS", "LAST ACTIVITY"}}
+	// Every tier, so a project mid-pipeline reads as "imported, not yet
+	// consolidated" rather than as an empty row.
+	rows := [][]string{{"PROJECT", "SESSIONS", "OBSERVATIONS", "SUMMARISED", "MEMORIES", "LAST ACTIVITY"}}
+	var pending int64
 	for _, p := range projects {
+		pending += p.Sessions - p.Summarised
 		rows = append(rows, []string{
 			orDash(p.Project),
-			fmt.Sprint(p.Memories),
 			fmt.Sprint(p.Sessions),
+			fmt.Sprint(p.Observations),
+			fmt.Sprintf("%d/%d", p.Summarised, p.Sessions),
+			fmt.Sprint(p.Memories),
 			p.LastSeen.Local().Format("2006-01-02 15:04"),
 		})
 	}
 	table(Out, rows)
+	if pending > 0 {
+		fmt.Fprintf(Out, "\n%d sessions awaiting consolidation. Run `dkm consolidate` to distil them into memories.\n", pending)
+	}
 	return 0
 }
 

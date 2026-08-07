@@ -440,25 +440,54 @@ func (s *Store) Lessons(ctx context.Context, id Identity, project string, limit 
 	return scanMemories(rows)
 }
 
-// ProjectSummary is one project with its memory and session counts.
+// ProjectSummary is one project with what it currently holds at every tier.
 type ProjectSummary struct {
-	Project  string    `json:"project"`
-	Memories int64     `json:"memories"`
-	Sessions int64     `json:"sessions"`
-	LastSeen time.Time `json:"last_seen"`
+	Project      string    `json:"project"`
+	Memories     int64     `json:"memories"`
+	Sessions     int64     `json:"sessions"`
+	Observations int64     `json:"observations"`
+	Summarised   int64     `json:"summarised"`
+	LastSeen     time.Time `json:"last_seen"`
 }
 
-// Projects returns per-project counts, for `dkm doctor` and the viewer.
+// Projects returns per-project counts across every tier.
+//
+// Built from the union of memories and sessions, not from memories alone.
+// Counting only memories means a project with 234 imported sessions and 21,174
+// observations does not appear at all until consolidation has run over it —
+// so immediately after the import that this tool exists to perform, the
+// listing is empty and the obvious conclusion is that the import failed.
+//
+// Reporting all four counts also makes the pipeline's state legible: raw
+// observations, how many sessions have been summarised, and how many memories
+// have been distilled out the far end.
 func (s *Store) Projects(ctx context.Context, id Identity) ([]ProjectSummary, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT m.project,
-		       count(*) AS memories,
-		       (SELECT count(*) FROM sessions sx WHERE sx.team_id = $1 AND sx.project = m.project),
-		       max(m.updated_at)
-		FROM memories m
-		WHERE `+visibleClause+` AND m.deleted_at IS NULL
-		GROUP BY m.project
-		ORDER BY max(m.updated_at) DESC
+		WITH known AS (
+			SELECT DISTINCT m.project FROM memories m
+			WHERE `+visibleClause+` AND m.deleted_at IS NULL
+			UNION
+			SELECT DISTINCT s.project FROM sessions s WHERE s.team_id = $1
+		)
+		SELECT k.project,
+		       (SELECT count(*) FROM memories m
+		         WHERE m.team_id = $1 AND (m.user_id = $2 OR m.visibility = 'team')
+		           AND m.deleted_at IS NULL AND m.project = k.project),
+		       (SELECT count(*) FROM sessions s
+		         WHERE s.team_id = $1 AND s.project = k.project),
+		       (SELECT count(*) FROM observations o
+		         WHERE o.team_id = $1 AND o.project = k.project),
+		       (SELECT count(*) FROM sessions s
+		         WHERE s.team_id = $1 AND s.project = k.project
+		           AND s.summary IS NOT NULL AND s.summary <> ''),
+		       GREATEST(
+		         COALESCE((SELECT max(m.updated_at) FROM memories m
+		                    WHERE m.team_id = $1 AND m.project = k.project), to_timestamp(0)),
+		         COALESCE((SELECT max(s.started_at) FROM sessions s
+		                    WHERE s.team_id = $1 AND s.project = k.project), to_timestamp(0))
+		       )
+		FROM known k
+		ORDER BY 6 DESC
 	`, id.TeamID, id.UserID)
 	if err != nil {
 		return nil, err
@@ -468,7 +497,8 @@ func (s *Store) Projects(ctx context.Context, id Identity) ([]ProjectSummary, er
 	var out []ProjectSummary
 	for rows.Next() {
 		var p ProjectSummary
-		if err := rows.Scan(&p.Project, &p.Memories, &p.Sessions, &p.LastSeen); err != nil {
+		if err := rows.Scan(&p.Project, &p.Memories, &p.Sessions,
+			&p.Observations, &p.Summarised, &p.LastSeen); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
