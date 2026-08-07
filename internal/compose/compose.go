@@ -319,6 +319,15 @@ func Rank(ms []Memory) []Memory {
 	order := map[string]int{"lesson": 0, "decision": 1, "preference": 2, "fact": 3}
 	out := append([]Memory(nil), ms...)
 	sort.SliceStable(out, func(i, j int) bool {
+		// The hand-written brief outranks everything, whatever its kind.
+		// Ranked normally it loses twice over: it is stored as a preference,
+		// which sorts third, and it is general by design, so it scores badly
+		// against any specific task -- so the one piece of grounding the user
+		// wrote themselves would be pushed out by the cap.
+		bi, bj := out[i].Source == SourceBrief, out[j].Source == SourceBrief
+		if bi != bj {
+			return bi
+		}
 		oi, oj := order[out[i].Kind], order[out[j].Kind]
 		if oi != oj {
 			return oi < oj
@@ -327,6 +336,9 @@ func Rank(ms []Memory) []Memory {
 	})
 	return out
 }
+
+// SourceBrief marks the project brief the user wrote by hand.
+const SourceBrief = "brief"
 
 // Dedupe drops memories already present, keeping the first occurrence.
 //

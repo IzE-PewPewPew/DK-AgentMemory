@@ -218,8 +218,26 @@ func decodePromptRequest(w http.ResponseWriter, r *http.Request) (promptRequest,
 //
 // Retrieval never fails the request. A prompt grounded in nothing is still a
 // usable prompt, and it says so; a 500 because the embedder was slow is not.
+// BriefTitle marks the one memory per project that the user wrote by hand.
+//
+// A brief works the day it is written. Everything else in the grounding has to
+// wait for hundreds of sessions to be read and distilled, which costs tokens
+// and hours -- so on a fresh project the corpus knows nothing and the composer
+// honestly says so. Three sentences typed by the person who owns the codebase
+// closes that gap immediately.
+const BriefTitle = "Project brief"
+
 func (s *Server) groundingFor(r *http.Request, id store.Identity, req promptRequest) []compose.Memory {
 	var out []compose.Memory
+
+	// The brief goes first and is never displaced. Ranked against the task like
+	// anything else it would score poorly -- it is general by design -- and be
+	// pushed out by a specific but less important match.
+	if req.Project != "" {
+		if b := s.projectBrief(r, id, req.Project); b != nil {
+			out = append(out, *b)
+		}
+	}
 
 	if ctx, err := s.store.BuildContext(r.Context(), id, req.Project, 700,
 		[]string{"lessons", "decisions", "preferences"}); err == nil && ctx != nil {
@@ -253,6 +271,27 @@ func (s *Server) groundingFor(r *http.Request, id store.Identity, req promptRequ
 	}
 
 	return compose.Rank(compose.Dedupe(out))
+}
+
+// projectBrief returns the hand-written brief for a project, if there is one.
+func (s *Server) projectBrief(r *http.Request, id store.Identity, project string) *compose.Memory {
+	ms, _, err := s.store.ListMemories(r.Context(), id, store.ListFilter{
+		Project: project,
+		Kinds:   []string{store.KindPreference},
+		Limit:   50,
+	})
+	if err != nil {
+		return nil
+	}
+	for _, m := range ms {
+		if m.Title == BriefTitle {
+			return &compose.Memory{
+				ID: m.ID, Kind: m.Kind, Title: m.Title, Body: m.Body,
+				Project: m.Project, Source: compose.SourceBrief,
+			}
+		}
+	}
+	return nil
 }
 
 func flatten(ms []store.Memory, source string) []compose.Memory {

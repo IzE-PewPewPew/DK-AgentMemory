@@ -297,3 +297,27 @@ func between(s, start, end string) string {
 	}
 	return s
 }
+
+// The brief is the one piece of grounding the user wrote themselves. Ranked
+// normally it loses twice: it is stored as a preference, which sorts third,
+// and it is general by design so it scores badly against any specific task.
+func TestBriefOutranksEverything(t *testing.T) {
+	got := Rank([]Memory{
+		{Kind: "lesson", Title: "l", Score: 0.9},
+		{Kind: "fact", Title: "f", Score: 0.95},
+		{Kind: "preference", Title: "Project brief", Source: SourceBrief},
+		{Kind: "decision", Title: "d", Score: 0.5},
+	})
+	if got[0].Source != SourceBrief {
+		t.Fatalf("first is %q from %q, want the brief", got[0].Title, got[0].Source)
+	}
+	// And it survives the cap, which is where it was actually being lost.
+	var many []Memory
+	many = append(many, Memory{Kind: "preference", Title: "Project brief", Source: SourceBrief})
+	for i := 0; i < 20; i++ {
+		many = append(many, Memory{Kind: "lesson", Title: "l", Score: 0.9, ID: string(rune('a' + i))})
+	}
+	if Select(Rank(many))[0].Source != SourceBrief {
+		t.Error("the brief was cut by the cap")
+	}
+}

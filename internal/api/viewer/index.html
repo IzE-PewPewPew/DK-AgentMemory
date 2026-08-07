@@ -657,12 +657,15 @@
           '<input id="cptarget" placeholder="Claude Opus 5" value="' + esc(composeState.target) + '">' +
           "</div>" +
           '<div class="row chks" style="margin-top:9px">' + boxes + "</div>" +
+          '<div id="cpbrief"></div>' +
           '<div class="row" style="margin-top:12px">' +
           '<button id="cpgo">Generate prompt</button>' +
           '<button id="cpprev">What would it use?</button>' +
           '<span id="cpstatus" style="align-self:center;color:var(--muted)"></span>' +
           "</div></div>" +
           '<div id="cpout"></div>');
+
+        renderBrief(projects);
 
         wireCompose();
       });
@@ -830,7 +833,7 @@
   ];
 
   // Kept outside the render so a redraw does not eat what is being typed.
-  var composeState = { task: "", project: "", target: "", focus: {}, result: null };
+  var composeState = { task: "", project: "", target: "", focus: {}, result: null, brief: null };
 
   function composeBody() {
     var body = { description: composeState.task, project: composeState.project };
@@ -965,6 +968,94 @@
         }).catch(function (e) { busy(false); status.textContent = e.message; });
       });
     }
+  }
+
+  // --- project brief --------------------------------------------------------
+
+  // The brief is the one piece of grounding that works the day it is written.
+  // Everything else waits on hundreds of sessions being read and distilled;
+  // three sentences from the person who owns the codebase closes that gap now.
+  //
+  // Stored as an ordinary memory of kind "preference" titled "Project brief",
+  // so it is searchable, exportable and editable like anything else rather
+  // than a second storage mechanism nothing else knows about.
+  var BRIEF_TITLE = "Project brief";
+
+  function renderBrief(projects) {
+    var box = el("cpbrief");
+    if (!box) return;
+    var proj = composeState.project;
+    if (!proj) { box.innerHTML = ""; return; }
+
+    var p = (projects || []).filter(function (x) { return x.project === proj; })[0] || {};
+    var mem = (p.memories || 0);
+
+    api("/v1/memories?" + new URLSearchParams({ project: proj, kind: "preference", limit: "50" }))
+      .then(function (d) {
+        var brief = (d.memories || []).filter(function (m) { return m.title === BRIEF_TITLE; })[0];
+        composeState.brief = brief || null;
+
+        if (brief) {
+          box.innerHTML = '<div class="card" style="margin-top:11px"><h3>Using your brief for ' +
+            esc(shortProject(proj)) + ", plus " + num(mem) + " memories</h3>" +
+            '<p class="dim" style="white-space:pre-wrap">' + esc(brief.body) + "</p>" +
+            '<div class="row" style="margin-top:9px"><button id="cpedit">Edit brief</button></div></div>';
+        } else if (mem < 10) {
+          box.innerHTML = '<div class="card" style="margin-top:11px"><h3>' +
+            esc(shortProject(proj)) + " has " + num(mem) + " memories, so this prompt will be thin</h3>" +
+            "<p>A brief you write yourself works today and costs nothing.</p>" +
+            '<div class="row" style="margin-top:9px"><button id="cpedit">Write a brief</button></div></div>';
+        } else {
+          box.innerHTML = '<div class="row" style="margin-top:9px">' +
+            '<button id="cpedit">Write a brief</button>' +
+            '<span class="dim" style="align-self:center">a brief is used in every prompt for this project</span></div>';
+        }
+        if (el("cpedit")) el("cpedit").addEventListener("click", openBrief);
+      }).catch(function () { box.innerHTML = ""; });
+  }
+
+  function openBrief() {
+    var proj = composeState.project;
+    var existing = composeState.brief ? composeState.brief.body : "";
+    el("cpbrief").innerHTML =
+      '<div class="card" style="margin-top:11px"><h3>Brief for ' + esc(shortProject(proj)) + "</h3>" +
+      "<p>What should every agent know before it touches this project? The stack, folder " +
+      "rules, things that always break. Plain sentences.</p>" +
+      '<textarea id="cpbtext" rows="5" placeholder="WPF + .NET 8. Never edit resources/core by hand, it is generated. Sign the patcher before upload or SmartScreen blocks it.">' +
+      esc(existing) + "</textarea>" +
+      '<p class="dim" style="margin-top:7px">This is used in every prompt for this project.</p>' +
+      '<div class="row" style="margin-top:9px"><button id="cpbsave">Save</button>' +
+      '<button id="cpbcancel">Cancel</button>' +
+      '<span id="cpbstatus" style="align-self:center;color:var(--muted)"></span></div></div>';
+
+    el("cpbcancel").addEventListener("click", function () { show("compose"); });
+    el("cpbsave").addEventListener("click", function () {
+      var body = el("cpbtext").value.trim();
+      if (!body) { el("cpbstatus").textContent = "write something first"; return; }
+      el("cpbsave").disabled = true;
+      el("cpbstatus").textContent = "saving…";
+
+      // Listing is newest-first by ULID, and the reader takes the first match,
+      // so an edit is a new row that wins. Older briefs stay as history rather
+      // than being destroyed, which matches how every other memory behaves
+      // here. The request carries no unknown fields: the decoder rejects them.
+      var payload = {
+        kind: "preference", title: BRIEF_TITLE, body: body,
+        project: proj, visibility: "team"
+      };
+
+      api("/v1/memories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }).then(function () {
+        el("cpbstatus").textContent = "saved";
+        setTimeout(function () { show("compose"); }, 700);
+      }).catch(function (e) {
+        el("cpbsave").disabled = false;
+        el("cpbstatus").textContent = e.message;
+      });
+    });
   }
 
   function selectText(node) {
