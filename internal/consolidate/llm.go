@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -122,9 +123,65 @@ func (c common) post(ctx context.Context, url string, headers map[string]string,
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("%s returned %s: %s", url, resp.Status, strings.TrimSpace(string(snippet)))
+		return &httpError{
+			Status:     resp.StatusCode,
+			URL:        url,
+			Body:       strings.TrimSpace(string(snippet)),
+			RetryAfter: retryAfter(resp),
+		}
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// httpError carries the provider's status code so the retry logic can tell a
+// busy provider from one that is refusing us.
+//
+// Previously every non-2xx collapsed into a formatted string, which made 503
+// "system cpu overloaded" and 401 "invalid token" indistinguishable to the
+// caller — so both got the same two attempts three seconds apart, which is too
+// many for the second and nowhere near enough for the first.
+type httpError struct {
+	Status     int
+	URL        string
+	Body       string
+	RetryAfter time.Duration // from the Retry-After header; zero when absent
+}
+
+func (e *httpError) Error() string {
+	return fmt.Sprintf("%s returned %d %s: %s", e.URL, e.Status, http.StatusText(e.Status), e.Body)
+}
+
+// Transient reports whether waiting and trying again could plausibly work.
+//
+// 429 and the 5xx family are the provider saying "not now". Everything else —
+// 400 malformed, 401 bad key, 403 forbidden, 404 wrong model — says "not ever,
+// as asked", and repeating the request only spends the quota faster.
+func (e *httpError) Transient() bool {
+	if e.Status == http.StatusTooManyRequests {
+		return true
+	}
+	return e.Status >= 500 && e.Status <= 599
+}
+
+// retryAfter reads the header, accepting both the delay-seconds and HTTP-date
+// forms the RFC allows. Zero when absent or unparseable.
+func retryAfter(resp *http.Response) time.Duration {
+	v := strings.TrimSpace(resp.Header.Get("Retry-After"))
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs < 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 func (c common) tokens() int {
@@ -345,22 +402,56 @@ func pick(a, b int) int {
 	return b
 }
 
-// completeWithRetry runs a completion with a small bounded retry.
+// maxAttempts is how many times one completion is tried before giving up.
 //
-// Two attempts, not five. Rate limits and transient 5xx are worth one retry;
-// beyond that the run is abandoned and picked up on the next tick, because the
-// work is idempotent and there is no deadline. A long retry loop inside a
-// scheduled job is how one bad hour becomes a queue nothing drains.
+// Five, with exponential backoff, and only for errors that could plausibly
+// clear. It used to be two attempts three seconds apart for everything, which
+// abandoned a 449-session drain the first time the provider answered
+// "system cpu overloaded (current: 99.1%)" — a condition that resolves in
+// seconds. Backing off to roughly a minute of patience costs nothing when the
+// provider is healthy and saves the whole run when it is briefly not.
+const maxAttempts = 5
+
+// backoffBase is the first retry delay. A variable rather than a constant so
+// tests can exercise the loop without waiting two real minutes for it.
+var backoffBase = 3 * time.Second
+
+// backoff returns how long to wait before the given retry.
+//
+// Exponential from 3s: 3, 9, 27, 81. A busy provider needs more than a fixed
+// three seconds, and a fixed short delay from every client at once is how a
+// struggling endpoint is kept struggling.
+func backoff(attempt int) time.Duration {
+	d := backoffBase
+	for i := 1; i < attempt; i++ {
+		d *= 3
+	}
+	return d
+}
+
+// completeWithRetry runs a completion, retrying only what is worth retrying.
+//
+// The work is idempotent and has no deadline, so abandoning a run is survivable
+// — but only for errors that will recur. A 401 fails identically on attempt
+// five; an exhausted token budget is deterministic and bills again each time.
+// Those return immediately. Overload and rate limiting get patience.
 func completeWithRetry(ctx context.Context, p Provider, req Request) (*Response, error) {
 	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
-		if attempt > 0 {
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			wait := backoff(attempt - 1)
+			// A provider that says how long to wait knows better than we do.
+			var he *httpError
+			if errors.As(lastErr, &he) && he.RetryAfter > wait {
+				wait = he.RetryAfter
+			}
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-time.After(3 * time.Second):
+			case <-time.After(wait):
 			}
 		}
+
 		resp, err := p.Complete(ctx, req)
 		if err == nil {
 			if resp.InputTokens == 0 && resp.OutputTokens == 0 {
@@ -374,15 +465,21 @@ func completeWithRetry(ctx context.Context, p Provider, req Request) (*Response,
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		// Retries exist for rate limits and transient 5xx. An exhausted token
-		// budget is deterministic: the second attempt fails identically and
-		// bills identically. Retrying it doubles the cost of a configuration
-		// mistake for no chance of success.
+
+		// An exhausted completion budget is deterministic: the next attempt
+		// fails identically and bills identically. Retrying it doubles the
+		// cost of a configuration mistake for no chance of success.
 		if errors.Is(err, ErrTokenBudget) {
 			return nil, err
 		}
+		// A refusal we can read is final. Only a busy provider is worth waiting
+		// for; a wrong key or an unknown model is not.
+		var he *httpError
+		if errors.As(err, &he) && !he.Transient() {
+			return nil, err
+		}
 	}
-	return nil, lastErr
+	return nil, fmt.Errorf("after %d attempts: %w", maxAttempts, lastErr)
 }
 
 // decodeList unmarshals a list of items from a model response that may be
