@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,10 @@ import (
 	"github.com/IzE-PewPewPew/DK-AgentMemory/internal/config"
 	"github.com/IzE-PewPewPew/DK-AgentMemory/internal/version"
 )
+
+// ErrTokenBudget means the model spent its completion budget without producing
+// an answer. Deterministic, so callers must not retry it.
+var ErrTokenBudget = errors.New("model produced no answer")
 
 // Provider is a chat-completion backend.
 //
@@ -245,8 +250,9 @@ func (o *openAI) Complete(ctx context.Context, req Request) (*Response, error) {
 		// setting that fixes it.
 		if choice.FinishReason == "length" {
 			return nil, fmt.Errorf(
-				"model produced no answer: it hit the token limit after %d reasoning tokens. "+
+				"%w: hit the %d-token limit after %d reasoning tokens. "+
 					"Raise consolidation.llm.max_tokens — reasoning models spend it before writing anything",
+				ErrTokenBudget, pick(req.MaxTokens, o.tokens()),
 				out.Usage.CompletionTokensDetails.ReasoningTokens)
 		}
 		if choice.Message.ReasoningContent != "" {
@@ -358,6 +364,13 @@ func completeWithRetry(ctx context.Context, p Provider, req Request) (*Response,
 		lastErr = err
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		// Retries exist for rate limits and transient 5xx. An exhausted token
+		// budget is deterministic: the second attempt fails identically and
+		// bills identically. Retrying it doubles the cost of a configuration
+		// mistake for no chance of success.
+		if errors.Is(err, ErrTokenBudget) {
+			return nil, err
 		}
 	}
 	return nil, lastErr

@@ -329,10 +329,21 @@ func (w *Worker) tier1SessionSummaries(ctx context.Context) error {
 			continue
 		}
 
+		// No per-tier token cap. This used to pin 400, which was an attempt to
+		// keep summaries short and was wrong twice over.
+		//
+		// max_tokens is a ceiling, not a target: capping it does not produce a
+		// shorter answer, it truncates one mid-sentence. Brevity belongs in the
+		// prompt, which already asks for two to four sentences.
+		//
+		// And on a reasoning model it does not truncate the answer, it prevents
+		// one. Kimi K3 spent all 400 on reasoning tokens and returned empty
+		// content — so every session failed with an error telling the operator
+		// to raise consolidation.llm.max_tokens, a setting this line was
+		// overriding.
 		resp, err := completeWithRetry(ctx, w.llm, Request{
-			System:    tier1System,
-			Prompt:    renderObservations(sess, obs),
-			MaxTokens: 400,
+			System: tier1System,
+			Prompt: renderObservations(sess, obs),
 		})
 		if err != nil {
 			runErr = err
