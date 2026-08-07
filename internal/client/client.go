@@ -508,6 +508,25 @@ func (c *Client) Graph(ctx context.Context, project, node string, depth int) (*s
 	return &g, err
 }
 
+// RebuildGraph re-derives a project's nodes and edges. Idempotent.
+type RebuildResult struct {
+	Project string `json:"project"`
+	Nodes   int    `json:"nodes"`
+	Edges   int    `json:"edges"`
+}
+
+func (c *Client) RebuildGraph(ctx context.Context, project string) (*RebuildResult, error) {
+	var out RebuildResult
+	// No client timeout: rebuilding a project with tens of thousands of
+	// observations is seconds, not milliseconds, and the default deadline
+	// would abandon work the server then completes anyway.
+	// The project goes in the query string, which is where the handler reads it.
+	err := c.AdminLong(ctx, http.MethodPost,
+		"/v1/graph/rebuild?"+q("project", project), nil, &out)
+	out.Project = project
+	return &out, err
+}
+
 // --- sessions --------------------------------------------------------------
 
 // CreateSession opens a session.

@@ -409,7 +409,9 @@ func cmdGraph(ctx context.Context, args []string) int {
 	project := fs.String("project", "", "project identity")
 	node := fs.String("node", "", "seed label, usually a file path")
 	depth := fs.Int("depth", 2, "hops from the seed")
-	if err := fs.Parse(args); err != nil {
+	rebuild := fs.Bool("rebuild", false, "re-derive nodes and edges before reading; idempotent")
+	all := fs.Bool("all", false, "with --rebuild, rebuild every project instead of just this one")
+	if _, err := parseFlags(fs, args); err != nil {
 		return 2
 	}
 
@@ -417,6 +419,35 @@ func cmdGraph(ctx context.Context, args []string) int {
 	if err != nil {
 		return failErr(err)
 	}
+
+	if *rebuild {
+		targets := []string{resolveProject(c, *project)}
+		if *all {
+			projects, err := c.Projects(ctx)
+			if err != nil {
+				return failErr(err)
+			}
+			targets = targets[:0]
+			for _, p := range projects {
+				if p.Project != "" {
+					targets = append(targets, p.Project)
+				}
+			}
+		}
+		for _, t := range targets {
+			res, err := c.RebuildGraph(ctx, t)
+			if err != nil {
+				fmt.Fprintf(Err, "  %-46s failed: %v\n", truncate(t, 46), err)
+				continue
+			}
+			fmt.Fprintf(Out, "  %-46s %5d nodes, %6d edges\n", truncate(t, 46), res.Nodes, res.Edges)
+		}
+		if *all {
+			return 0
+		}
+		fmt.Fprintln(Out)
+	}
+
 	g, err := c.Graph(ctx, resolveProject(c, *project), *node, *depth)
 	if err != nil {
 		return failErr(err)
@@ -424,8 +455,9 @@ func cmdGraph(ctx context.Context, args []string) int {
 
 	if len(g.Nodes) == 0 {
 		fmt.Fprintln(Out, "No graph for this project yet.")
-		fmt.Fprintln(Out, "Nodes come from real co-occurrence in stored memories, so an empty graph")
-		fmt.Fprintln(Out, "means nothing has co-occurred yet — not that the lookup failed.")
+		fmt.Fprintln(Out, "Nodes come from files named by stored memories and observations, and edges")
+		fmt.Fprintln(Out, "from files worked on together. If this project has been imported but never")
+		fmt.Fprintln(Out, "drawn, run `dkm graph --rebuild`.")
 		return 0
 	}
 

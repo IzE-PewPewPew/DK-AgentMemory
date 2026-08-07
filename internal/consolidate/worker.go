@@ -16,6 +16,7 @@ package consolidate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -355,6 +356,18 @@ func (w *Worker) guard(ctx context.Context, name string, fn func(context.Context
 // where the operator has asked for the whole backlog.
 const tier1Batch = 25
 
+// Observation counts for one session summary.
+//
+// tier1Observations is the normal slice. tier1ObservationsRetry is what an
+// oversized session is retried with after the model spends its whole budget
+// reasoning and writes nothing — the corpus contains a session with 867
+// observations and 311,575 characters, which is far more than any summary
+// needs and more than the model can hold while still having budget to answer.
+const (
+	tier1Observations      = 400
+	tier1ObservationsRetry = 60
+)
+
 func (w *Worker) tier1SessionSummaries(ctx context.Context) error {
 	_, err := w.tier1Once(ctx)
 	return err
@@ -373,7 +386,7 @@ func (w *Worker) tier1Once(ctx context.Context) (int, error) {
 		return 0, err
 	}
 
-	var produced, inTok, outTok int
+	var produced, skipped, inTok, outTok int
 	var runErr error
 
 	for _, sess := range sessions {
@@ -381,7 +394,7 @@ func (w *Worker) tier1Once(ctx context.Context) (int, error) {
 			break
 		}
 
-		obs, err := w.store.SessionObservations(ctx, sess.ID, 400)
+		obs, err := w.store.SessionObservations(ctx, sess.ID, tier1Observations)
 		if err != nil {
 			runErr = err
 			break
@@ -409,6 +422,34 @@ func (w *Worker) tier1Once(ctx context.Context) (int, error) {
 			System: tier1System,
 			Prompt: renderObservations(sess, obs),
 		})
+
+		// An exhausted budget is a property of THIS session, not of the run.
+		// One session of 867 observations and 311,575 characters gives a
+		// reasoning model more than it can hold and still have budget left to
+		// answer — and abandoning the batch there stranded the 300 sessions
+		// behind it. Retry the outlier on a much smaller slice; if it still
+		// cannot be summarised, record that and move on.
+		if errors.Is(err, ErrTokenBudget) && len(obs) > tier1ObservationsRetry {
+			w.log.Warn("session too large to summarise in one call; retrying on a shorter slice",
+				"session", sess.ID, "observations", len(obs), "retry_with", tier1ObservationsRetry)
+			if short, sErr := w.store.SessionObservations(ctx, sess.ID, tier1ObservationsRetry); sErr == nil && len(short) > 0 {
+				resp, err = completeWithRetry(ctx, w.llm, Request{
+					System: tier1System,
+					Prompt: renderObservations(sess, short),
+				})
+			}
+		}
+		if errors.Is(err, ErrTokenBudget) {
+			// Marked summarised with an empty summary, the same as a session
+			// with no observations. Leaving it unmarked would put it at the
+			// head of the next batch for ever, and a drain would spend the
+			// whole backlog re-failing on it.
+			w.log.Warn("giving up on session; the model produced no summary",
+				"session", sess.ID, "observations", len(obs))
+			_ = w.store.MarkSummarised(ctx, sess.ID, "")
+			skipped++
+			continue
+		}
 		if err != nil {
 			runErr = err
 			break
@@ -429,7 +470,7 @@ func (w *Worker) tier1Once(ctx context.Context) (int, error) {
 
 	if inTok+outTok > 0 {
 		w.log.Info("tier 1 session summaries",
-			"sessions", len(sessions), "summaries", produced,
+			"sessions", len(sessions), "summaries", produced, "skipped", skipped,
 			"input_tokens", inTok, "output_tokens", outTok)
 	}
 	if err := w.store.FinishRun(ctx, runID, len(sessions), produced, 0, inTok, outTok, runErr); err != nil {
@@ -695,7 +736,11 @@ type synthesisedLesson struct {
 }
 
 func (w *Worker) tier3SynthesiseLessons(ctx context.Context) error {
-	pairs, err := w.store.ProjectsForGraph(ctx)
+	// Projects with memories, not every project the graph can draw. Lesson
+	// synthesis reads facts, and a project whose facts have not been extracted
+	// yet has nothing to synthesise from -- walking it would spend an LLM call
+	// to produce an empty list.
+	pairs, err := w.store.ProjectsWithMemories(ctx)
 	if err != nil {
 		return err
 	}
@@ -835,18 +880,14 @@ func (w *Worker) maintenance(ctx context.Context) error {
 		w.log.Debug("strength decay applied", "rows", n)
 	}
 
-	if w.cfg.Retention.ObservationDays > 0 {
-		window := time.Duration(w.cfg.Retention.ObservationDays) * 24 * time.Hour
-		n, err := w.store.PurgeObservations(ctx, window)
-		if err != nil {
-			return err
-		}
-		if n > 0 {
-			w.log.Info("purged expired observations",
-				"rows", n, "older_than_days", w.cfg.Retention.ObservationDays)
-		}
-	}
-
+	// Rebuild BEFORE purging, not after.
+	//
+	// The graph is now derived from observations, and this pass used to delete
+	// expired ones and then rebuild from what was left -- so every maintenance
+	// run silently dropped the retention window's worth of structure from the
+	// graph, in the same pass that removed the evidence for it. Rebuilding
+	// first means the edges outlive the raw rows they were derived from, which
+	// is the entire point of deriving them.
 	pairs, err := w.store.ProjectsForGraph(ctx)
 	if err != nil {
 		return err
@@ -857,6 +898,19 @@ func (w *Worker) maintenance(ctx context.Context) error {
 		}
 		if _, _, err := w.store.RebuildGraph(ctx, pair[0], pair[1]); err != nil {
 			w.log.Warn("graph rebuild failed", "team", pair[0], "project", pair[1], "error", err)
+		}
+	}
+
+	// Now that the structure has been derived from them, the raw rows can go.
+	if w.cfg.Retention.ObservationDays > 0 {
+		window := time.Duration(w.cfg.Retention.ObservationDays) * 24 * time.Hour
+		n, err := w.store.PurgeObservations(ctx, window)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			w.log.Info("purged expired observations",
+				"rows", n, "older_than_days", w.cfg.Retention.ObservationDays)
 		}
 	}
 	return nil

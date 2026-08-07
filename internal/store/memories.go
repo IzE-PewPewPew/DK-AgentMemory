@@ -447,6 +447,7 @@ type ProjectSummary struct {
 	Sessions     int64     `json:"sessions"`
 	Observations int64     `json:"observations"`
 	Summarised   int64     `json:"summarised"`
+	GraphNodes   int64     `json:"graph_nodes"`
 	LastSeen     time.Time `json:"last_seen"`
 }
 
@@ -480,6 +481,8 @@ func (s *Store) Projects(ctx context.Context, id Identity) ([]ProjectSummary, er
 		       (SELECT count(*) FROM sessions s
 		         WHERE s.team_id = $1 AND s.project = k.project
 		           AND s.summary IS NOT NULL AND s.summary <> ''),
+		       (SELECT count(*) FROM graph_nodes g
+		         WHERE g.team_id = $1 AND g.project = k.project),
 		       GREATEST(
 		         COALESCE((SELECT max(m.updated_at) FROM memories m
 		                    WHERE m.team_id = $1 AND m.project = k.project), to_timestamp(0)),
@@ -487,7 +490,7 @@ func (s *Store) Projects(ctx context.Context, id Identity) ([]ProjectSummary, er
 		                    WHERE s.team_id = $1 AND s.project = k.project), to_timestamp(0))
 		       )
 		FROM known k
-		ORDER BY 6 DESC
+		ORDER BY 7 DESC
 	`, id.TeamID, id.UserID)
 	if err != nil {
 		return nil, err
@@ -498,7 +501,7 @@ func (s *Store) Projects(ctx context.Context, id Identity) ([]ProjectSummary, er
 	for rows.Next() {
 		var p ProjectSummary
 		if err := rows.Scan(&p.Project, &p.Memories, &p.Sessions,
-			&p.Observations, &p.Summarised, &p.LastSeen); err != nil {
+			&p.Observations, &p.Summarised, &p.GraphNodes, &p.LastSeen); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

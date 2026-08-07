@@ -81,6 +81,7 @@
   .gc-mem  { fill: var(--muted); opacity: .65; }
   .gt { font-size: 9.5px; fill: var(--muted); font-family: var(--mono); pointer-events: none; }
   .gn:hover .gc-file, .gn:hover .gc-mem { fill: var(--warn); }
+  .gn[data-kind="file"] { cursor: pointer; }
   .gk { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
   .gk-file { background: var(--accent); }
   .gk-mem  { background: var(--muted); opacity: .65; }
@@ -315,27 +316,50 @@
           render('<div class="empty">No projects yet.</div>');
           return;
         }
-        if (!graphProject) graphProject = projects[0].project;
+        // Default to the project with the most to draw, not the most recently
+        // touched. Landing on an empty graph reads as a broken feature.
+        if (!graphProject) {
+          graphProject = projects.slice().sort(function (a, b) {
+            return (b.graph_nodes || 0) - (a.graph_nodes || 0);
+          })[0].project;
+        }
+        var current = projects.filter(function (p) { return p.project === graphProject; })[0] || {};
 
+        // Count what the graph will actually draw. This used to show memory
+        // count, which is zero for any project that has been imported but not
+        // consolidated — so every real project read "(0)".
         var opts = projects.map(function (p) {
           return '<option value="' + esc(p.project) + '"' +
             (p.project === graphProject ? " selected" : "") + ">" +
-            esc(p.project) + " (" + p.memories + ")</option>";
+            esc(p.project) + " (" + num(p.graph_nodes || 0) + " files)</option>";
         }).join("");
 
-        return api("/v1/graph?" + new URLSearchParams({ project: graphProject, limit: 300 })).then(function (g) {
+        var params = { project: graphProject, limit: 300 };
+        if (graphSeed) { params.node = graphSeed; params.depth = graphDepth; }
+
+        return api("/v1/graph?" + new URLSearchParams(params)).then(function (g) {
+          var focus = graphSeed
+            ? '<button id="gclear">Show whole project</button>' +
+              '<span class="dim" style="align-self:center">focused on ' +
+              esc(shortPath(graphSeed)) + " · " + graphDepth + " hops</span>"
+            : "";
           var head = '<div class="row">' +
             '<select id="gproj">' + opts + "</select>" +
-            '<button id="grebuild">Rebuild from co-occurrence</button>' +
+            '<button id="grebuild">Rebuild</button>' + focus +
             '<span id="gstatus" style="align-self:center;color:var(--muted)">' +
-            g.node_count + " nodes, " + g.edge_count + " edges</span></div>";
+            num(g.node_count) + " nodes, " + num(g.edge_count) + " edges</span></div>";
 
           if (!g.node_count) {
-            render(head + '<div class="card"><h3>Nothing to draw yet</h3><p>' +
-              "Graph nodes come from files named by stored memories, and edges from files " +
-              "named together. This project has no memories carrying file paths yet — " +
-              "consolidation produces them from imported sessions. Press rebuild after " +
-              "running Learn.</p></div>");
+            // Say what the corpus actually holds. Sending the user to Learn --
+            // which its own copy warns "can run for hours" of LLM spend -- to
+            // produce something already sitting in observations was expensive
+            // advice for a problem they did not have.
+            var have = (current.observations || 0)
+              ? num(current.observations) + " observations across " +
+                num(current.sessions) + " sessions are stored for this project. " +
+                "Press Rebuild to derive the graph from them — it costs nothing and takes about a second."
+              : "Nothing has been imported for this project yet.";
+            render(head + '<div class="card"><h3>Not drawn yet</h3><p>' + have + "</p></div>");
             wireGraphControls(projects);
             return;
           }
@@ -345,7 +369,8 @@
             "</div>" +
             '<div class="stats"><span><span class="gk gk-file"></span> file</span>' +
             '<span><span class="gk gk-mem"></span> memory</span>' +
-            "<span>drag to move · edge thickness is how often two files appeared together</span></div>");
+            "<span>click a file to focus on what it is worked on with · drag to move · " +
+            "thicker edges were edited together more often</span></div>");
 
           drawGraph(g);
           wireGraphControls(projects);
@@ -457,22 +482,54 @@
   };
 
   var graphProject = "";
+  var graphSeed = "";       // when set, show only this file's neighbourhood
+  var graphDepth = 2;
+
+  // Path labels collide badly at project scale: the 300 heaviest files in one
+  // project here share only 257 distinct basenames, with route.ts appearing 26
+  // times. Walk up the path until the tail is unique among what is drawn.
+  function labelFor(path, taken) {
+    var parts = String(path).split(/[\/\\]/).filter(Boolean);
+    for (var n = 1; n <= parts.length; n++) {
+      var cand = parts.slice(parts.length - n).join("/");
+      if (!taken[cand] || n === parts.length) { taken[cand] = true; return cand; }
+    }
+    return path;
+  }
+
+  function shortPath(p) {
+    var parts = String(p).split(/[\/\\]/).filter(Boolean);
+    return parts.length <= 2 ? p : parts.slice(-2).join("/");
+  }
 
   function wireGraphControls(projects) {
     var sel = el("gproj");
     if (sel) {
       sel.addEventListener("change", function () {
         graphProject = sel.value;
+        graphSeed = "";   // a focus from one project means nothing in another
         show("graph");
       });
+    }
+    var clear = el("gclear");
+    if (clear) {
+      clear.addEventListener("click", function () { graphSeed = ""; show("graph"); });
     }
     var btn = el("grebuild");
     if (btn) {
       btn.addEventListener("click", function () {
         btn.disabled = true;
+        var started = Date.now();
         el("gstatus").textContent = "rebuilding…";
+        // Read the result. Discarding it made a rebuild that produced nothing
+        // indistinguishable from one that worked.
         api("/v1/graph/rebuild?" + new URLSearchParams({ project: graphProject }), { method: "POST" })
-          .then(function () { show("graph"); })
+          .then(function (res) {
+            var secs = ((Date.now() - started) / 1000).toFixed(1);
+            el("gstatus").textContent = num(res.nodes) + " nodes, " + num(res.edges) +
+              " edges in " + secs + "s";
+            setTimeout(function () { show("graph"); }, 900);
+          })
           .catch(function (e) { el("gstatus").textContent = e.message; btn.disabled = false; });
       });
     }
@@ -504,6 +561,15 @@
       return { s: index[e.src], t: index[e.dst], w: e.weight || 1, rel: e.rel };
     });
 
+    // Spring rest length scaled to the space each node actually has.
+    //
+    // A fixed 90px was tuned when a graph was twenty nodes. At three hundred it
+    // asks for roughly five times the canvas that exists, so the layout pushes
+    // everything outward and nearly half the nodes end up pinned against the
+    // clamp walls in a ring. sqrt(area/n) is the spacing the box can honour.
+    var rest = Math.max(26, Math.min(90, Math.sqrt((W * H) / Math.max(1, nodes.length))));
+    var repel = 900 * (rest / 90);
+
     // Fixed iteration count, run before the first paint. Animating the
     // settling looks impressive and means the layout is different every time
     // you glance at it.
@@ -514,7 +580,7 @@
           var a = nodes[i], b = nodes[j];
           var dx = b.x - a.x, dy = b.y - a.y;
           var d2 = dx * dx + dy * dy || 0.01;
-          var f = 900 / d2;
+          var f = repel / d2;
           var d = Math.sqrt(d2);
           var ux = dx / d, uy = dy / d;
           a.vx -= ux * f; a.vy -= uy * f;
@@ -525,7 +591,7 @@
         var a = nodes[l.s], b = nodes[l.t];
         var dx = b.x - a.x, dy = b.y - a.y;
         var d = Math.sqrt(dx * dx + dy * dy) || 0.01;
-        var f = (d - 90) * 0.02;
+        var f = (d - rest) * 0.02;
         var ux = dx / d, uy = dy / d;
         a.vx += ux * f; a.vy += uy * f;
         b.vx -= ux * f; b.vy -= uy * f;
@@ -549,22 +615,46 @@
         '" stroke="currentColor" stroke-opacity="' + (0.15 + 0.5 * (l.w / maxW)).toFixed(2) +
         '" stroke-width="' + (0.6 + 2.4 * (l.w / maxW)).toFixed(2) + '" />');
     });
+    // Label only the heaviest few. Three hundred labels at this scale overlap
+    // into an unreadable smear; the rest carry their full path in a tooltip.
+    var byWeight = nodes.slice().sort(function (a, b) { return b.weight - a.weight; });
+    var labelled = {};
+    var taken = {};
+    byWeight.slice(0, nodes.length > 60 ? 25 : nodes.length).forEach(function (n) {
+      if (n.kind === "file") labelled[n.id] = labelFor(n.label, taken);
+    });
+
     nodes.forEach(function (n, i) {
       var r = n.kind === "file" ? 5 + Math.min(9, Math.sqrt(n.weight) * 2) : 4;
-      var short = n.label.split("/").pop();
-      if (short.length > 22) short = short.slice(0, 21) + "…";
-      parts.push('<g class="gn" data-i="' + i + '">' +
+      var text = labelled[n.id];
+      if (text && text.length > 26) text = "…" + text.slice(text.length - 25);
+      parts.push('<g class="gn" data-i="' + i + '" data-label="' + esc(n.label) +
+        '" data-kind="' + esc(n.kind) + '">' +
         '<circle cx="' + n.x.toFixed(1) + '" cy="' + n.y.toFixed(1) + '" r="' + r.toFixed(1) +
         '" class="' + (n.kind === "file" ? "gc-file" : "gc-mem") + '"><title>' +
-        esc(n.kind + ": " + n.label) + "</title></circle>" +
-        (n.kind === "file"
+        esc(n.kind + ": " + n.label + "  (" + n.weight + ")") + "</title></circle>" +
+        (text
           ? '<text x="' + n.x.toFixed(1) + '" y="' + (n.y - r - 4).toFixed(1) +
-            '" text-anchor="middle" class="gt">' + esc(short) + "</text>"
+            '" text-anchor="middle" class="gt">' + esc(text) + "</text>"
           : "") +
         "</g>");
     });
 
     svg.innerHTML = parts.join("");
+
+    // Click a file to see just its neighbourhood. This is the difference
+    // between a 683-node picture nobody can read and a ~30-node one that
+    // answers "what do I touch when I touch this?". The API has always
+    // supported the seeded query; nothing ever called it.
+    svg.addEventListener("click", function (ev) {
+      var grp = ev.target.closest ? ev.target.closest("g.gn") : null;
+      if (!grp || grp.dataset.kind !== "file") return;
+      var label = grp.dataset.label;
+      if (!label || label === graphSeed) return;
+      graphSeed = label;
+      graphDepth = 2;
+      show("graph");
+    });
   }
 
   function show(name) {
@@ -602,7 +692,12 @@
             if (frame.indexOf("event:") === -1) return;
             // Any change refreshes the current view. The payload is not trusted
             // to patch the DOM; it only signals that a refetch is worthwhile.
-            if (views[tab]) views[tab]().catch(function () {});
+            //
+            // The graph is exempt. A refresh re-runs the whole force layout, so
+            // the picture moves under the cursor mid-look — and it destroys the
+            // open project dropdown and any focus the user had clicked into.
+            // The graph only changes on an explicit rebuild anyway.
+            if (views[tab] && tab !== "graph") views[tab]().catch(function () {});
             loadStats();
           });
           return pump();
