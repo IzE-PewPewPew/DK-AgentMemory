@@ -66,6 +66,18 @@
   .stats { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 16px; font-size: 13px; color: var(--muted); }
   .stats b { color: var(--ink); font-weight: 600; }
   code { font-family: var(--mono); font-size: 12.5px; }
+  select {
+    font: inherit; color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px;
+  }
+  #gsvg { color: var(--muted); background: transparent; }
+  .gc-file { fill: var(--accent); }
+  .gc-mem  { fill: var(--muted); opacity: .65; }
+  .gt { font-size: 9.5px; fill: var(--muted); font-family: var(--mono); pointer-events: none; }
+  .gn:hover .gc-file, .gn:hover .gc-mem { fill: var(--warn); }
+  .gk { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
+  .gk-file { background: var(--accent); }
+  .gk-mem  { background: var(--muted); opacity: .65; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); }
   th { color: var(--muted); font-weight: 500; }
@@ -100,6 +112,7 @@
       <button data-tab="sessions">Sessions</button>
       <button data-tab="activity">Activity</button>
       <button data-tab="projects">Projects</button>
+      <button data-tab="graph">Graph</button>
       <button data-tab="learn">Learn</button>
       <button data-tab="search">Search</button>
     </nav>
@@ -260,6 +273,57 @@
       });
     },
 
+    graph: function () {
+      // Nodes and edges come from real co-occurrence in the stored corpus:
+      // a file node exists because a memory names that file, an edge exists
+      // because two files were named together. Nothing here is inferred by a
+      // model, so a small corpus draws a small graph — which is the honest
+      // answer, and better than a populated-looking picture of relationships
+      // nobody can trace back to anything.
+      return api("/v1/projects").then(function (pj) {
+        var projects = (pj.projects || []).filter(function (p) { return p.project; });
+        if (!projects.length) {
+          render('<div class="empty">No projects yet.</div>');
+          return;
+        }
+        if (!graphProject) graphProject = projects[0].project;
+
+        var opts = projects.map(function (p) {
+          return '<option value="' + esc(p.project) + '"' +
+            (p.project === graphProject ? " selected" : "") + ">" +
+            esc(p.project) + " (" + p.memories + ")</option>";
+        }).join("");
+
+        return api("/v1/graph?" + new URLSearchParams({ project: graphProject, limit: 300 })).then(function (g) {
+          var head = '<div class="row">' +
+            '<select id="gproj">' + opts + "</select>" +
+            '<button id="grebuild">Rebuild from co-occurrence</button>' +
+            '<span id="gstatus" style="align-self:center;color:var(--muted)">' +
+            g.node_count + " nodes, " + g.edge_count + " edges</span></div>";
+
+          if (!g.node_count) {
+            render(head + '<div class="card"><h3>Nothing to draw yet</h3><p>' +
+              "Graph nodes come from files named by stored memories, and edges from files " +
+              "named together. This project has no memories carrying file paths yet — " +
+              "consolidation produces them from imported sessions. Press rebuild after " +
+              "running Learn.</p></div>");
+            wireGraphControls(projects);
+            return;
+          }
+
+          render(head + '<div class="card" style="padding:0;overflow:hidden">' +
+            '<svg id="gsvg" viewBox="0 0 900 560" style="width:100%;height:auto;display:block"></svg>' +
+            "</div>" +
+            '<div class="stats"><span><span class="gk gk-file"></span> file</span>' +
+            '<span><span class="gk gk-mem"></span> memory</span>' +
+            "<span>drag to move · edge thickness is how often two files appeared together</span></div>");
+
+          drawGraph(g);
+          wireGraphControls(projects);
+        });
+      });
+    },
+
     learn: function () {
       return api("/v1/activity").then(function (act) {
         var c = act.consolidation || {};
@@ -352,6 +416,117 @@
       });
     }
   };
+
+  var graphProject = "";
+
+  function wireGraphControls(projects) {
+    var sel = el("gproj");
+    if (sel) {
+      sel.addEventListener("change", function () {
+        graphProject = sel.value;
+        show("graph");
+      });
+    }
+    var btn = el("grebuild");
+    if (btn) {
+      btn.addEventListener("click", function () {
+        btn.disabled = true;
+        el("gstatus").textContent = "rebuilding…";
+        api("/v1/graph/rebuild?" + new URLSearchParams({ project: graphProject }), { method: "POST" })
+          .then(function () { show("graph"); })
+          .catch(function (e) { el("gstatus").textContent = e.message; btn.disabled = false; });
+      });
+    }
+  }
+
+  // A small force-directed layout, written out rather than pulled from a
+  // library: the page runs under a CSP that forbids every external origin, and
+  // a graph of a few hundred nodes does not need a physics engine.
+  function drawGraph(g) {
+    var svg = el("gsvg");
+    if (!svg) return;
+
+    var W = 900, H = 560;
+    var nodes = g.nodes.map(function (n, i) {
+      // Seeded on a circle rather than at random, so the same corpus lays out
+      // the same way twice and the picture is comparable between visits.
+      var a = (i / g.nodes.length) * Math.PI * 2;
+      return {
+        id: n.id, label: n.label, kind: n.kind, weight: n.weight || 1,
+        x: W / 2 + Math.cos(a) * 200, y: H / 2 + Math.sin(a) * 180, vx: 0, vy: 0
+      };
+    });
+    var index = {};
+    nodes.forEach(function (n, i) { index[n.id] = i; });
+
+    var links = (g.edges || []).filter(function (e) {
+      return index[e.src] !== undefined && index[e.dst] !== undefined;
+    }).map(function (e) {
+      return { s: index[e.src], t: index[e.dst], w: e.weight || 1, rel: e.rel };
+    });
+
+    // Fixed iteration count, run before the first paint. Animating the
+    // settling looks impressive and means the layout is different every time
+    // you glance at it.
+    for (var step = 0; step < 300; step++) {
+      var k = 1 - step / 300;
+      for (var i = 0; i < nodes.length; i++) {
+        for (var j = i + 1; j < nodes.length; j++) {
+          var a = nodes[i], b = nodes[j];
+          var dx = b.x - a.x, dy = b.y - a.y;
+          var d2 = dx * dx + dy * dy || 0.01;
+          var f = 900 / d2;
+          var d = Math.sqrt(d2);
+          var ux = dx / d, uy = dy / d;
+          a.vx -= ux * f; a.vy -= uy * f;
+          b.vx += ux * f; b.vy += uy * f;
+        }
+      }
+      links.forEach(function (l) {
+        var a = nodes[l.s], b = nodes[l.t];
+        var dx = b.x - a.x, dy = b.y - a.y;
+        var d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        var f = (d - 90) * 0.02;
+        var ux = dx / d, uy = dy / d;
+        a.vx += ux * f; a.vy += uy * f;
+        b.vx -= ux * f; b.vy -= uy * f;
+      });
+      nodes.forEach(function (n) {
+        n.vx += (W / 2 - n.x) * 0.002;
+        n.vy += (H / 2 - n.y) * 0.002;
+        n.x += n.vx * k; n.y += n.vy * k;
+        n.vx *= 0.85; n.vy *= 0.85;
+        n.x = Math.max(30, Math.min(W - 30, n.x));
+        n.y = Math.max(24, Math.min(H - 24, n.y));
+      });
+    }
+
+    var maxW = links.reduce(function (m, l) { return Math.max(m, l.w); }, 1);
+    var parts = [];
+    links.forEach(function (l) {
+      var a = nodes[l.s], b = nodes[l.t];
+      parts.push('<line x1="' + a.x.toFixed(1) + '" y1="' + a.y.toFixed(1) +
+        '" x2="' + b.x.toFixed(1) + '" y2="' + b.y.toFixed(1) +
+        '" stroke="currentColor" stroke-opacity="' + (0.15 + 0.5 * (l.w / maxW)).toFixed(2) +
+        '" stroke-width="' + (0.6 + 2.4 * (l.w / maxW)).toFixed(2) + '" />');
+    });
+    nodes.forEach(function (n, i) {
+      var r = n.kind === "file" ? 5 + Math.min(9, Math.sqrt(n.weight) * 2) : 4;
+      var short = n.label.split("/").pop();
+      if (short.length > 22) short = short.slice(0, 21) + "…";
+      parts.push('<g class="gn" data-i="' + i + '">' +
+        '<circle cx="' + n.x.toFixed(1) + '" cy="' + n.y.toFixed(1) + '" r="' + r.toFixed(1) +
+        '" class="' + (n.kind === "file" ? "gc-file" : "gc-mem") + '"><title>' +
+        esc(n.kind + ": " + n.label) + "</title></circle>" +
+        (n.kind === "file"
+          ? '<text x="' + n.x.toFixed(1) + '" y="' + (n.y - r - 4).toFixed(1) +
+            '" text-anchor="middle" class="gt">' + esc(short) + "</text>"
+          : "") +
+        "</g>");
+    });
+
+    svg.innerHTML = parts.join("");
+  }
 
   function show(name) {
     tab = name;
