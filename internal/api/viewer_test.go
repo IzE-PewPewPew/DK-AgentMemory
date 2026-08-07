@@ -40,8 +40,15 @@ func TestViewerServesIndexWithoutRedirectLoop(t *testing.T) {
 			if !strings.Contains(body, "<title>DevKuong Memories</title>") {
 				t.Errorf("response is not the viewer page:\n%.200s", body)
 			}
-			if !strings.Contains(body, `data-tab="learn"`) {
-				t.Error("the Learn tab is missing from the served page")
+			// Every tab the script dispatches on must exist in the markup.
+			// A rename that updates one and not the other leaves a button
+			// that renders nothing, or a view nothing can reach.
+			for _, tabName := range []string{
+				"projects", "knows", "graph", "compose", "sessions", "activity", "status",
+			} {
+				if !strings.Contains(body, `data-tab="`+tabName+`"`) {
+					t.Errorf("the %q tab is missing from the served page", tabName)
+				}
 			}
 		})
 	}

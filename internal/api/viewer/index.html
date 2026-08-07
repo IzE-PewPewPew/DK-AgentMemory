@@ -71,6 +71,21 @@
   .runbar .bar { width: 190px; height: 6px; margin: 0; }
   .runbar b { color: var(--ink); font-weight: 600; }
   .runbar.busy { border-color: var(--accent); }
+  .gwrap { display: flex; gap: 9px; align-items: flex-start; }
+  .gpanel { width: 290px; flex: 0 0 290px; max-height: 560px; overflow-y: auto; }
+  .gpanel h3 { overflow-wrap: anywhere; }
+  @media (max-width: 900px) { .gwrap { flex-direction: column } .gpanel { width: 100%; flex: 1 } }
+  .legend { display: flex; flex-wrap: wrap; gap: 7px; }
+  .lg {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px;
+    font-size: 12px; color: var(--ink); background: none; cursor: pointer;
+  }
+  .lg.on { border-color: var(--accent); }
+  button.link {
+    border: none; background: none; color: var(--accent); padding: 0 4px;
+    font-size: 12.5px; cursor: pointer;
+  }
   .runbar .spin {
     width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
     animation: pulse 1.4s ease-in-out infinite;
@@ -104,10 +119,11 @@
     border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px;
   }
   #gsvg { color: var(--muted); background: transparent; }
-  .gc-file { fill: var(--accent); }
+  /* Node fills are set per folder as an inline attribute, so hover targets the
+     circle itself rather than a class that is no longer applied. */
   .gc-mem  { fill: var(--muted); opacity: .65; }
   .gt { font-size: 9.5px; fill: var(--muted); font-family: var(--mono); pointer-events: none; }
-  .gn:hover .gc-file, .gn:hover .gc-mem { fill: var(--warn); }
+  .gn:hover circle { stroke: var(--ink); stroke-width: 2; }
   .gn[data-kind="file"] { cursor: pointer; }
   .gk { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
   .gk-file { background: var(--accent); }
@@ -121,7 +137,7 @@
 <body>
 <header>
   <h1>DevKuong Memories</h1>
-  <span class="ro">read only</span>
+  <span class="ro" title="Runs on this machine. Nothing is sent anywhere else.">local only</span>
   <span class="spacer"></span>
   <span id="live"><span class="dot" id="dot"></span> <span id="livetext">connecting</span></span>
 </header>
@@ -129,27 +145,35 @@
 <main>
   <div id="gate" hidden>
     <div class="card">
-      <h3>API key</h3>
-      <p>The viewer calls the same API as every other client. Paste a key issued with
-         <code>dkm admin key issue</code>. It is kept in this tab only and cleared when the tab closes.</p>
+      <h3>Paste your API key</h3>
+      <p>The key stays in this tab. Closing the tab forgets it.</p>
       <div class="row" style="margin-top:12px">
         <input id="key" type="password" placeholder="pmk_…" autocomplete="off" spellcheck="false">
         <button id="connect">Connect</button>
+      </div>
+      <div id="gateerr" class="err" style="margin-top:11px" hidden></div>
+      <p style="margin-top:13px">No key yet? Run this in a terminal:</p>
+      <div class="row" style="margin-top:6px">
+        <code id="keycmd" class="promptbox" style="flex:1;padding:8px 11px">dkm admin key issue</code>
+        <button id="keycopy">Copy</button>
       </div>
     </div>
   </div>
 
   <div id="app" hidden>
+    <!--
+      Projects first, and it is the landing tab. The old landing view listed
+      memories, which is the emptiest surface here until consolidation has run
+      -- so a database holding 36,000 observations opened on a blank page.
+    -->
     <nav>
-      <button data-tab="memories" aria-selected="true">Memories</button>
-      <button data-tab="lessons">Lessons</button>
+      <button data-tab="projects" aria-selected="true">Projects</button>
+      <button data-tab="knows">Knows</button>
+      <button data-tab="graph">Map</button>
+      <button data-tab="compose">Compose</button>
       <button data-tab="sessions">Sessions</button>
       <button data-tab="activity">Activity</button>
-      <button data-tab="projects">Projects</button>
-      <button data-tab="graph">Graph</button>
-      <button data-tab="learn">Learn</button>
-      <button data-tab="compose">Compose</button>
-      <button data-tab="search">Search</button>
+      <button data-tab="status">Status</button>
     </nav>
 
     <div id="error" class="err" hidden></div>
@@ -163,11 +187,6 @@
     <div id="runbar" class="runbar" hidden></div>
 
     <div id="stats" class="stats"></div>
-
-    <div class="row" id="searchrow" hidden>
-      <input id="q" placeholder="hybrid search — try a paraphrase, not just keywords">
-      <button id="go">Search</button>
-    </div>
 
     <div id="list"></div>
   </div>
@@ -265,63 +284,200 @@
     loadProgress();
   }
 
-  // The one line that answers "did it read my work, and is it still going?"
+  // The run bar answers "did it read my work, how far has it got, and is it
+  // still moving" — the question that twice made this tool look broken when it
+  // was working.
   //
   // Counted the way the pipeline counts: the denominator is closed sessions,
   // because open ones are never eligible and including them makes a bar that
   // can never fill; the numerator is "has left the queue", because a session
   // skipped for being empty or too large is done, and counting only sessions
   // with summary text made real progress look like no progress.
+  //
+  // Built once, then updated by textContent on fixed ids. Rebuilding the
+  // innerHTML on every poll would blow away a receipt the user is reading and
+  // reset the button mid-run.
+  var runBarBuilt = false;
+  var running = false;
+
+  function buildRunBar() {
+    el("runbar").innerHTML =
+      '<span id="rbdot"></span>' +
+      '<span id="rbstate"></span>' +
+      '<span class="bar"><span id="rbfill" style="width:0%"></span></span>' +
+      '<span id="rbcounts"></span>' +
+      '<button id="rbgo"></button>' +
+      '<button id="rball" title="Work through every unread session in one go. Can run for hours.">Read all</button>' +
+      '<span id="rbreceipt" class="dim"></span>';
+    el("rbgo").addEventListener("click", function () { startRun(false); });
+    el("rball").addEventListener("click", function () { startRun(true); });
+    runBarBuilt = true;
+  }
+
   function loadProgress() {
-    api("/v1/progress").then(function (p) {
+    return api("/v1/progress").then(function (p) {
       var bar = el("runbar");
-      var pct = p.eligible ? Math.round((p.read / p.eligible) * 100) : 0;
-      var parts = [];
-
-      if (p.running) {
-        parts.push('<span class="spin"></span><span>Reading your sessions now…</span>');
-      } else if (p.eligible && p.read >= p.eligible) {
-        parts.push("<span>All sessions read.</span>");
-      } else if (p.eligible) {
-        parts.push("<span>Not finished reading.</span>");
-      } else {
-        bar.hidden = true;
-        return;
-      }
-
-      parts.push('<span class="bar"><span style="width:' + pct + '%"></span></span>');
-      parts.push("<span><b>" + num(p.read) + "</b> of <b>" + num(p.eligible) + "</b> sessions read</span>");
-      parts.push("<span><b>" + num(p.facts) + "</b> facts</span>");
-      parts.push("<span><b>" + num(p.lessons) + "</b> lessons</span>");
-      if (p.open) parts.push('<span class="dim">' + num(p.open) + " still open</span>");
-
-      bar.className = "runbar" + (p.running ? " busy" : "");
-      bar.innerHTML = parts.join("");
+      if (!p.eligible && !p.open) { bar.hidden = true; return; }
+      if (!runBarBuilt) buildRunBar();
       bar.hidden = false;
+
+      var behind = Math.max(0, p.eligible - p.read);
+      var pct = p.eligible ? Math.round((p.read / p.eligible) * 100) : 0;
+      var live = running || p.running;
+
+      el("rbdot").className = live ? "spin" : "";
+      el("rbstate").textContent = live
+        ? "Reading sessions now. Leave this tab open — closing it stops the run."
+        : (behind ? num(behind) + " sessions are stored but not read yet."
+                  : "Every closed session has been read.");
+      el("rbfill").style.width = pct + "%";
+
+      var counts = num(p.read) + " of " + num(p.eligible) + " sessions read · " +
+        num(p.facts) + " facts · " + num(p.lessons) + " lessons";
+      if (p.open) counts += " · " + num(p.open) + " sessions still open";
+      el("rbcounts").textContent = counts;
+      el("rbcounts").title = p.open
+        ? "An open session cannot be read yet. It is counted separately so the bar can reach the end."
+        : "";
+
+      el("rbgo").textContent = live ? "reading…" : (behind ? "Read 25 now" : "Check again");
+      el("rbgo").disabled = live;
+      el("rball").disabled = live || !behind;
+      el("rball").hidden = !behind;
+      bar.className = "runbar" + (live ? " busy" : "");
     }).catch(function () { el("runbar").hidden = true; });
   }
 
+  // Every press produces a receipt. Silence after a paid button is what made a
+  // working run indistinguishable from a broken one.
+  //
+  // Deliberately no Stop button: aborting the request is what orphans the run
+  // record, so the most destructive control on the page would be the one that
+  // looks safest.
+  function startRun(drain) {
+    if (running) return;
+    running = true;
+    var started = Date.now();
+    el("rbreceipt").textContent = "";
+    loadProgress();
+
+    var poll = setInterval(loadProgress, 5000);
+
+    api("/v1/admin/consolidate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(drain ? { drain: true } : {})
+    }).then(function (res) {
+      var r = (res && res.report) || {};
+      if (!res.ran) {
+        el("rbreceipt").textContent = res.reason || "Reading is switched off.";
+      } else if (r.errors && r.errors.length) {
+        // The provider's own words. "ran: true" is not success -- every tier
+        // can fail and the route still reports it.
+        el("rbreceipt").textContent = "Stopped: " + r.errors[0];
+      } else if (!r.sessions_summarised && !r.facts_produced && !r.lessons_produced) {
+        el("rbreceipt").textContent = "Ran, but there was nothing new to read.";
+      } else {
+        el("rbreceipt").textContent =
+          "Read " + num(r.sessions_summarised || 0) + " sessions, wrote " +
+          num(r.facts_produced || 0) + " facts and " + num(r.lessons_produced || 0) +
+          " lessons in " + (r.duration || elapsed(started)) + ".";
+      }
+    }).catch(function (e) {
+      el("rbreceipt").textContent = "Stopped: " + e.message;
+    }).then(function () {
+      running = false;
+      clearInterval(poll);
+      loadProgress();
+      loadStats();
+    });
+  }
+
+  function elapsed(since) {
+    var s = Math.round((Date.now() - since) / 1000);
+    if (s < 90) return s + "s";
+    return Math.floor(s / 60) + "m " + (s % 60) + "s";
+  }
+
   var views = {
-    memories: function () {
-      return api("/v1/memories?limit=50").then(function (d) {
-        render((d.memories || []).map(memoryCard).join(""));
+    // One list, not three. Memories, Lessons and Search were three near
+    // identical render paths funnelling into the same card, differing only by
+    // a filter the API already accepts -- and the search tab threw away the
+    // list you were looking at instead of narrowing it.
+    knows: function () {
+      var kinds = KINDS.filter(function (k) { return knowsState.kind[k]; });
+      var q = knowsState.q.trim();
+
+      var body = { limit: 50 };
+      if (projectFilter) body.project = projectFilter;
+
+      var req = q
+        ? api("/v1/search", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              query: q, limit: 30,
+              project: projectFilter || undefined,
+              kinds: kinds.length ? kinds : undefined
+            })
+          }).then(function (d) { return { items: d.results || [], searched: true, vector: d.vector !== false }; })
+        : api("/v1/memories?" + new URLSearchParams(withKinds({
+            limit: 50, project: projectFilter || ""
+          }, kinds))).then(function (d) { return { items: d.memories || [], searched: false }; });
+
+      return Promise.all([req, projectList()]).then(function (r) {
+        var res = r[0], projects = r[1];
+        var items = res.items;
+
+        var head =
+          '<div class="row" style="margin-bottom:9px">' +
+          projectSelect() +
+          '<input id="kq" placeholder="say it in your own words — this is not keyword search" value="' +
+          esc(knowsState.q) + '">' +
+          '<button id="kgo">Search</button></div>' +
+          '<div class="row chks" style="margin-bottom:11px">' +
+          '<span class="dim">show:</span>' +
+          KINDS.map(function (k) {
+            return '<label class="chk"><input type="checkbox" data-kind="' + k + '"' +
+              (knowsState.kind[k] ? " checked" : "") + "> " + k + "</label>";
+          }).join("") +
+          '<button id="kall" class="link">all</button><button id="knone" class="link">none</button></div>';
+
+        var note = "";
+        if (res.searched) {
+          note = '<div class="stats"><span>' + num(items.length) + " results · " +
+            (res.vector ? "hybrid" : "keyword only (the embedder is not answering)") + "</span></div>";
+        }
+
+        var listHTML;
+        if (items.length) {
+          listHTML = items.map(memoryCard).join("");
+        } else if (res.searched) {
+          listHTML = '<div class="card"><h3>No match' +
+            (projectFilter ? " in " + esc(shortProject(projectFilter)) : "") + "</h3><p>" +
+            "There are only " + num(totalMemories) + " memories so far, so most searches find nothing yet.</p></div>";
+        } else {
+          listHTML = emptyKnows(projects);
+        }
+
+        render(head + note + listHTML + backlogFooter());
+        wireKnows();
       });
     },
-    lessons: function () {
-      return api("/v1/lessons?limit=100").then(function (d) {
-        render((d.lessons || []).map(memoryCard).join(""));
-      });
-    },
+
     sessions: function () {
-      return api("/v1/sessions?limit=50").then(function (d) {
+      return api("/v1/sessions?limit=50" + (projectFilter ? "&project=" + encodeURIComponent(projectFilter) : "")).then(function (d) {
         var rows = (d.sessions || []).map(function (s) {
           return "<tr><td><code>" + esc(s.agent || "—") + "</code></td><td>" + esc(s.project || "—") +
             "</td><td>" + esc(ago(s.started_at)) + "</td><td>" + (s.ended_at ? "closed" : "open") +
             "</td><td>" + esc(s.summary || "") + "</td></tr>";
         }).join("");
-        render(rows
-          ? '<div class="card scroll"><table><thead><tr><th>Agent</th><th>Project</th><th>Started</th><th>State</th><th>Summary</th></tr></thead><tbody>' + rows + "</tbody></table></div>"
-          : "");
+        render('<div class="row" style="margin-bottom:9px">' + projectSelect() + "</div>" +
+          (rows
+            ? '<div class="card scroll"><table><thead><tr><th>Agent</th><th>Project</th><th>Started</th><th>State</th><th>Summary</th></tr></thead><tbody>' + rows + "</tbody></table></div>"
+            : '<div class="card"><h3>No sessions' +
+              (projectFilter ? " in " + esc(shortProject(projectFilter)) : "") + "</h3></div>"));
+        wireProjectSelect();
       });
     },
     projects: function () {
@@ -343,10 +499,10 @@
 
         var pending = list.reduce(function (n, p) { return n + (p.sessions - p.summarised); }, 0);
         var note = pending
-          ? '<div class="card"><h3>' + num(pending) + ' sessions awaiting consolidation</h3><p>' +
-            'Observations are stored the moment they are imported. They become searchable ' +
-            'memories only after the consolidation worker summarises them and distils facts. ' +
-            'Run it from the Learn tab, or with <code>dkm consolidate</code>.</p></div>'
+          ? '<div class="card"><h3>' + num(pending) + ' sessions have not been read yet</h3><p>' +
+            'Notes are stored the moment they are imported. They only become memories after ' +
+            'the reader has been over them, and that costs tokens, so it does not start on ' +
+            'its own. Use the bar at the top of the page, or <code>dkm consolidate --drain</code>.</p></div>'
           : "";
         render(note + '<div class="card scroll"><table><thead><tr><th>Project</th>' +
           "<th>Sessions</th><th>Observations</th><th>Summarised</th><th>Memories</th>" +
@@ -409,20 +565,35 @@
             esc(p.project) + " (" + num(p.graph_nodes || 0) + " files)</option>";
         }).join("");
 
-        var params = { project: graphProject, limit: 300 };
+        // 2000, not 300. The largest project here has 683 files, so a limit of
+        // 300 silently hid 56% of it and the page said nothing — the user was
+        // looking at less than half his biggest codebase believing it was all
+        // of it. The server clamps at 2000, so this asks for everything it
+        // will give.
+        var params = { project: graphProject, limit: 2000 };
         if (graphSeed) { params.node = graphSeed; params.depth = graphDepth; }
 
         return api("/v1/graph?" + new URLSearchParams(params)).then(function (g) {
           var focus = graphSeed
             ? '<button id="gclear">Show whole project</button>' +
-              '<span class="dim" style="align-self:center">focused on ' +
-              esc(shortPath(graphSeed)) + " · " + graphDepth + " hops</span>"
+              '<span class="dim" style="align-self:center">showing only ' +
+              esc(shortPath(graphSeed)) + " and what it links to</span>"
             : "";
+
+          var stored = current.graph_nodes || 0;
+          var drawn = g.node_count || 0;
+          var status = graphSeed
+            ? num(drawn) + " files linked to this one"
+            : (stored > drawn
+              ? "Showing " + num(drawn) + " of " + num(stored) + " files. The least-touched ones are left out."
+              : num(drawn) + " files · " + num(g.edge_count) + " links · from " +
+                num(current.sessions || 0) + " sessions");
+
           var head = '<div class="row">' +
             '<select id="gproj">' + opts + "</select>" +
             '<button id="grebuild">Rebuild</button>' + focus +
             '<span id="gstatus" style="align-self:center;color:var(--muted)">' +
-            num(g.node_count) + " nodes, " + num(g.edge_count) + " edges</span></div>";
+            esc(status) + "</span></div>";
 
           if (!g.node_count) {
             // Say what the corpus actually holds. Sending the user to Learn --
@@ -439,13 +610,17 @@
             return;
           }
 
-          render(head + '<div class="card" style="padding:0;overflow:hidden">' +
+          render(head +
+            '<div class="gwrap">' +
+            '<div class="card" style="padding:0;overflow:hidden;flex:1;min-width:0">' +
             '<svg id="gsvg" viewBox="0 0 900 560" style="width:100%;height:auto;display:block"></svg>' +
             "</div>" +
-            '<div class="stats"><span><span class="gk gk-file"></span> file</span>' +
-            '<span><span class="gk gk-mem"></span> memory</span>' +
-            "<span>click a file to focus on what it is worked on with · drag to move · " +
-            "thicker edges were edited together more often</span></div>");
+            '<div class="card gpanel" id="gdetail"><p class="dim">Click a file to see what you ' +
+            "change at the same time.</p></div></div>" +
+            '<div id="glegend"></div>' +
+            '<div class="stats"><span>Two files are linked if you changed both in the same ' +
+            "session, within a few steps of each other. This comes from your real edits, not " +
+            "from the import lines in the code.</span></div>");
 
           drawGraph(g);
           wireGraphControls(projects);
@@ -493,105 +668,43 @@
       });
     },
 
-    learn: function () {
-      return api("/v1/activity").then(function (act) {
-        var c = act.consolidation || {};
-        var head = '<div class="card"><h3>Consolidation</h3>';
+    // Status: run history and spend. History, not live state -- the run bar
+    // above owns "is it moving right now", because it survives tab switches
+    // and this panel does not.
+    status: function () {
+      return api("/v1/admin/runs").then(function (d) {
+        var spend = d.spend_last_30d || {};
+        var runs = d.runs || [];
+        var tierName = { 1: "reading sessions", 2: "extracting facts", 3: "finding lessons" };
 
-        if (c.enabled) {
-          head += "<p>Enabled via <code>" + esc(c.provider || "?") + "</code>. " +
-            "Raw sessions become summaries, summaries become facts, and recurring facts become lessons. " +
-            "This calls your LLM provider and costs tokens.</p>" +
-            '<div class="row" style="margin-top:12px">' +
-            '<button id="runlearn">Run one batch</button>' +
-            '<button id="drainlearn">Consolidate everything</button>' +
-            '<span id="learnstatus" style="align-self:center;color:var(--muted)"></span></div>' +
-            '<p style="margin-top:9px">One batch takes the next ' + (c.batch || 25) + ' sessions. ' +
-            "Consolidating everything works through the whole backlog in one go — the right " +
-            "choice straight after an import, and it can run for hours.</p>";
+        var body = '<div class="stats"><span>last 30 days: <b>' +
+          num(spend.input_tokens || 0) + "</b> tokens in, <b>" +
+          num(spend.output_tokens || 0) + "</b> out</span></div>";
+
+        if (!runs.length) {
+          body += '<div class="card"><h3>Nothing has run yet</h3><p>' +
+            "Use the bar at the top of the page to start reading your sessions.</p></div>";
         } else {
-          head += "<p>Disabled. Memories are stored and searchable, but nothing is ever distilled " +
-            "into lessons. Set <code>consolidation.enabled</code>, configure " +
-            "<code>consolidation.llm</code>, export the API key named by " +
-            "<code>api_key_env</code>, and restart.</p>";
+          var rows = runs.map(function (r) {
+            return "<tr><td>" + esc((r.started_at || "").slice(0, 16).replace("T", " ")) +
+              "</td><td>" + esc(tierName[r.tier] || r.tier) +
+              "</td><td>" + esc(r.project ? shortProject(r.project) : "—") +
+              "</td><td>" + num(r.items) + "</td><td>" + num(r.produced) + "</td><td>" + num(r.deduped) +
+              "</td><td>" + num((r.input_tokens || 0) + (r.output_tokens || 0)) +
+              "</td><td>" + (r.error ? '<span style="color:var(--warn)">' + esc(r.error) + "</span>"
+                                     : (r.finished_at ? "ok" : '<span class="dim">did not finish</span>')) +
+              "</td></tr>";
+          }).join("");
+          body += '<div class="card scroll"><table><thead><tr><th>When</th><th>What</th>' +
+            "<th>Project</th><th>Read</th><th>Wrote</th><th>Merged</th><th>Tokens</th><th>Result</th>" +
+            "</tr></thead><tbody>" + rows + "</tbody></table></div>";
         }
-        head += "</div>";
-
-        return api("/v1/admin/runs").then(function (d) {
-          var spend = d.spend_last_30d || {};
-          var runs = d.runs || [];
-          var tierName = { 1: "session summaries", 2: "fact extraction", 3: "lesson synthesis" };
-
-          var body = head +
-            '<div class="stats"><span>last 30 days: <b>' + (spend.input_tokens || 0) +
-            "</b> tokens in, <b>" + (spend.output_tokens || 0) + "</b> out</span></div>";
-
-          if (!runs.length) {
-            body += '<div class="empty">No consolidation runs yet.</div>';
-          } else {
-            var rows = runs.map(function (r) {
-              return "<tr><td>" + esc((r.started_at || "").slice(0, 16).replace("T", " ")) +
-                "</td><td>" + esc(tierName[r.tier] || r.tier) +
-                "</td><td>" + esc(r.project || "—") +
-                "</td><td>" + r.items + "</td><td>" + r.produced + "</td><td>" + r.deduped +
-                "</td><td>" + ((r.input_tokens || 0) + (r.output_tokens || 0)) +
-                "</td><td>" + (r.error ? '<span style="color:var(--warn)">' + esc(r.error) + "</span>" : "ok") +
-                "</td></tr>";
-            }).join("");
-            body += '<div class="card scroll"><table><thead><tr><th>When</th><th>Tier</th>' +
-              "<th>Project</th><th>Input</th><th>Produced</th><th>Deduped</th><th>Tokens</th><th>Result</th>" +
-              "</tr></thead><tbody>" + rows + "</tbody></table></div>";
-          }
-
-          render(body);
-
-          function wireRun(id, drain, note) {
-            var btn = el(id);
-            if (!btn) return;
-            btn.addEventListener("click", function () {
-              var one = el("runlearn"), all = el("drainlearn");
-              if (one) one.disabled = true;
-              if (all) all.disabled = true;
-              el("learnstatus").textContent = note;
-              api("/v1/admin/consolidate", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(drain ? { drain: true } : {})
-              }).then(function (res) {
-                var r = (res && res.report) || {};
-                el("learnstatus").textContent = res.ran
-                  ? (r.sessions_summarised || 0) + " summarised, " + (r.facts_produced || 0) +
-                    " facts, " + (r.lessons_produced || 0) + " lessons in " + (r.duration || "?")
-                  : (res.reason || "did not run");
-                setTimeout(function () { show("learn"); }, 1500);
-              }).catch(function (e) {
-                el("learnstatus").textContent = e.message;
-                if (one) one.disabled = false;
-                if (all) all.disabled = false;
-              });
-            });
-          }
-          wireRun("runlearn", false, "running — this may take a minute…");
-          wireRun("drainlearn", true, "consolidating the whole backlog — this can run for hours, leave the tab open…");
-        }).catch(function (e) {
-          // The runs and trigger endpoints are admin-only. A non-admin key
-          // should see the explanation rather than a bare error.
-          render(head + '<div class="card"><p>Run history needs an admin key. ' +
-            esc(e.message) + "</p></div>");
-        });
-      });
-    },
-    search: function () {
-      var q = el("q").value.trim();
-      if (!q) { render('<div class="empty">Enter a query.</div>'); return Promise.resolve(); }
-      return api("/v1/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: q, limit: 20 })
-      }).then(function (d) {
-        var head = '<div class="stats"><span>mode <b>' + esc(d.mode) + "</b></span><span><b>" +
-          (d.count || 0) + "</b> results</span></div>";
-        render(head + (d.results || []).map(memoryCard).join(""));
+        render(body);
+      }).catch(function (e) {
+        // The runs endpoint is admin-only. A read key should see the reason
+        // rather than a bare error.
+        render('<div class="card"><h3>Run history needs an admin key</h3><p>' +
+          esc(e.message) + "</p></div>");
       });
     }
   };
@@ -599,6 +712,114 @@
   var graphProject = "";
   var graphSeed = "";       // when set, show only this file's neighbourhood
   var graphDepth = 2;
+
+  // --- shared list state ----------------------------------------------------
+
+  // The four kinds the store actually accepts. Not derived by subtraction from
+  // a total: models.go defines fact, decision, lesson and preference, so
+  // "everything that is not a lesson" is two kinds, not one.
+  var KINDS = ["fact", "decision", "lesson", "preference"];
+
+  // Persisted, because this user reloads the page all day and losing the
+  // filter every time is its own small tax.
+  var projectFilter = localStorage.getItem("dkm_project") || "";
+  var knowsState = {
+    q: "",
+    kind: JSON.parse(localStorage.getItem("dkm_kinds") || "null") ||
+      { fact: true, decision: true, lesson: true, preference: true }
+  };
+  var projectsCache = null;
+  var totalMemories = 0;
+
+  function withKinds(obj, kinds) {
+    // URLSearchParams cannot express a repeated key from an object literal, so
+    // the kinds are appended after construction.
+    var p = new URLSearchParams(obj);
+    kinds.forEach(function (k) { p.append("kind", k); });
+    return p;
+  }
+
+  function projectList() {
+    if (projectsCache) return Promise.resolve(projectsCache);
+    return api("/v1/projects").then(function (d) {
+      projectsCache = (d.projects || []).filter(function (p) { return p.project; });
+      totalMemories = projectsCache.reduce(function (n, p) { return n + (p.memories || 0); }, 0);
+      return projectsCache;
+    }).catch(function () { return []; });
+  }
+
+  function shortProject(p) {
+    return String(p).split("/").pop();
+  }
+
+  function projectSelect() {
+    var opts = ['<option value="">All projects</option>'].concat(
+      (projectsCache || []).map(function (p) {
+        return '<option value="' + esc(p.project) + '"' +
+          (p.project === projectFilter ? " selected" : "") + ">" +
+          esc(shortProject(p.project)) + " (" + num(p.sessions) + " sessions)</option>";
+      })).join("");
+    return '<select id="pfilter">' + opts + "</select>";
+  }
+
+  function wireProjectSelect() {
+    var sel = el("pfilter");
+    if (!sel) return;
+    sel.addEventListener("change", function () {
+      projectFilter = sel.value;
+      localStorage.setItem("dkm_project", projectFilter);
+      show(tab);
+    });
+  }
+
+  function currentProject() {
+    return (projectsCache || []).filter(function (p) { return p.project === projectFilter; })[0];
+  }
+
+  function emptyKnows(projects) {
+    var p = currentProject();
+    if (p) {
+      return '<div class="card"><h3>Nothing distilled for ' + esc(shortProject(p.project)) + " yet</h3><p>" +
+        num(p.observations) + " observations are stored for it. Reading them costs tokens, " +
+        "so it does not start on its own.</p></div>";
+    }
+    var obs = (projects || []).reduce(function (n, x) { return n + (x.observations || 0); }, 0);
+    return '<div class="card"><h3>Nothing distilled yet</h3><p>' +
+      num(obs) + " observations are stored. Reading them costs tokens, so it does not " +
+      "start on its own.</p></div>";
+  }
+
+  function backlogFooter() {
+    var p = currentProject();
+    if (p && p.sessions > p.summarised) {
+      return '<div class="stats"><span>Can\'t find it? ' + num(p.sessions - p.summarised) +
+        " of " + esc(shortProject(p.project)) + "'s sessions are not read yet.</span></div>";
+    }
+    return "";
+  }
+
+  function wireKnows() {
+    wireProjectSelect();
+    var q = el("kq"), go = el("kgo");
+    function run() { knowsState.q = q.value; show("knows"); }
+    if (go) go.addEventListener("click", run);
+    if (q) q.addEventListener("keydown", function (e) { if (e.key === "Enter") run(); });
+
+    Array.prototype.forEach.call(document.querySelectorAll("[data-kind]"), function (b) {
+      b.addEventListener("change", function () {
+        knowsState.kind[b.dataset.kind] = b.checked;
+        localStorage.setItem("dkm_kinds", JSON.stringify(knowsState.kind));
+        show("knows");
+      });
+    });
+    function setAll(v) {
+      KINDS.forEach(function (k) { knowsState.kind[k] = v; });
+      localStorage.setItem("dkm_kinds", JSON.stringify(knowsState.kind));
+      show("knows");
+    }
+    if (el("kall")) el("kall").addEventListener("click", function () { setAll(true); });
+    if (el("knone")) el("knone").addEventListener("click", function () { setAll(false); });
+  }
 
   var COMPOSE_FOCUS = [
     { k: "flow", label: "flow" },
@@ -876,12 +1097,19 @@
     }
 
     var maxW = links.reduce(function (m, l) { return Math.max(m, l.w); }, 1);
+    // Edge alpha scaled by density. Constants tuned when a graph was twenty
+    // nodes make 3,657 links a grey wash on the biggest project -- the one with
+    // the most to show ends up the least readable.
+    var density = links.length / Math.max(1, nodes.length);
+    var alphaScale = Math.min(1, 4 / Math.max(1, density));
+
     var parts = [];
-    links.forEach(function (l) {
+    links.forEach(function (l, li) {
       var a = nodes[l.s], b = nodes[l.t];
-      parts.push('<line x1="' + a.x.toFixed(1) + '" y1="' + a.y.toFixed(1) +
+      parts.push('<line data-l="' + li + '" x1="' + a.x.toFixed(1) + '" y1="' + a.y.toFixed(1) +
         '" x2="' + b.x.toFixed(1) + '" y2="' + b.y.toFixed(1) +
-        '" stroke="currentColor" stroke-opacity="' + (0.15 + 0.5 * (l.w / maxW)).toFixed(2) +
+        '" stroke="currentColor" stroke-opacity="' +
+        ((0.15 + 0.5 * (l.w / maxW)) * alphaScale).toFixed(3) +
         '" stroke-width="' + (0.6 + 2.4 * (l.w / maxW)).toFixed(2) + '" />');
     });
     // Label only the heaviest few. Three hundred labels at this scale overlap
@@ -893,15 +1121,17 @@
       if (n.kind === "file") labelled[n.id] = labelFor(n.label, taken);
     });
 
+    var groups = folderGroups(nodes);
+
     nodes.forEach(function (n, i) {
       var r = n.kind === "file" ? 5 + Math.min(9, Math.sqrt(n.weight) * 2) : 4;
       var text = labelled[n.id];
       if (text && text.length > 26) text = "…" + text.slice(text.length - 25);
       parts.push('<g class="gn" data-i="' + i + '" data-label="' + esc(n.label) +
-        '" data-kind="' + esc(n.kind) + '">' +
+        '" data-kind="' + esc(n.kind) + '" data-g="' + (n.group == null ? "" : n.group) + '">' +
         '<circle cx="' + n.x.toFixed(1) + '" cy="' + n.y.toFixed(1) + '" r="' + r.toFixed(1) +
-        '" class="' + (n.kind === "file" ? "gc-file" : "gc-mem") + '"><title>' +
-        esc(n.kind + ": " + n.label + "  (" + n.weight + ")") + "</title></circle>" +
+        '" fill="' + (n.kind === "file" ? groupColour(n.group) : "var(--muted)") +
+        '"><title>' + esc(n.label + "  (" + n.weight + ")") + "</title></circle>" +
         (text
           ? '<text x="' + n.x.toFixed(1) + '" y="' + (n.y - r - 4).toFixed(1) +
             '" text-anchor="middle" class="gt">' + esc(text) + "</text>"
@@ -910,32 +1140,194 @@
     });
 
     svg.innerHTML = parts.join("");
+    renderLegend(groups, nodes);
 
-    // Click a file to see just its neighbourhood. This is the difference
-    // between a 683-node picture nobody can read and a ~30-node one that
-    // answers "what do I touch when I touch this?". The API has always
-    // supported the seeded query; nothing ever called it.
+    // Adjacency, built once, so selecting a file is a DOM opacity pass rather
+    // than a refetch and a fresh 300-iteration layout. Re-running the physics
+    // on click moved the whole picture under the cursor and lost the node the
+    // user had just decided to look at.
+    var adj = {};
+    links.forEach(function (l) {
+      (adj[l.s] = adj[l.s] || []).push({ i: l.t, w: l.w });
+      (adj[l.t] = adj[l.t] || []).push({ i: l.s, w: l.w });
+    });
+
+    var groupEls = svg.querySelectorAll("g.gn");
+    var lineEls = svg.querySelectorAll("line");
+
+    function highlight(keep) {
+      // keep === null restores everything.
+      for (var i = 0; i < groupEls.length; i++) {
+        groupEls[i].style.opacity = (!keep || keep[i]) ? "1" : "0.10";
+      }
+      for (var j = 0; j < lineEls.length; j++) {
+        var l = links[+lineEls[j].dataset.l];
+        lineEls[j].style.opacity = (!keep || (keep[l.s] && keep[l.t])) ? "1" : "0.04";
+      }
+    }
+    graphHighlight = highlight;
+
+    function selectNode(i) {
+      var n = nodes[i];
+      var nbrs = (adj[i] || []).slice().sort(function (a, b) { return b.w - a.w; });
+
+      var keep = {};
+      keep[i] = true;
+      nbrs.forEach(function (x) { keep[x.i] = true; });
+      highlight(keep);
+
+      var rows = nbrs.slice(0, 12).map(function (x) {
+        return '<tr><td><a href="#" class="nbr" data-i="' + x.i + '">' +
+          esc(shortPath(nodes[x.i].label)) + "</a></td><td>" + num(x.w) + "</td></tr>";
+      }).join("");
+
+      el("gdetail").innerHTML =
+        "<h3>" + esc(shortPath(n.label)) + "</h3>" +
+        '<p class="dim" style="overflow-wrap:anywhere">' + esc(n.label) + "</p>" +
+        (nbrs.length
+          ? "<p>You change this at the same time as <b>" + num(nbrs.length) + "</b> other files.</p>" +
+            '<div class="scroll"><table><thead><tr><th>Files you change at the same time</th><th></th></tr></thead><tbody>' +
+            rows + "</tbody></table></div>" +
+            (nbrs.length > 12 ? '<p class="dim">…and ' + num(nbrs.length - 12) + " more</p>" : "") +
+            '<div class="row" style="margin-top:10px">' +
+            '<button id="gonly">Show only these</button><button id="gclr">Clear</button></div>' +
+            '<p class="dim" style="margin-top:7px">"Show only these" redraws the map with just ' +
+            "this file and the files linked to it.</p>"
+          : "<p>You have never changed this file at the same time as another file.</p>");
+
+      Array.prototype.forEach.call(el("gdetail").querySelectorAll("a.nbr"), function (a) {
+        a.addEventListener("click", function (ev) { ev.preventDefault(); selectNode(+a.dataset.i); });
+      });
+      if (el("gonly")) el("gonly").addEventListener("click", function () {
+        graphSeed = n.label; graphDepth = 1; show("graph");
+      });
+      if (el("gclr")) el("gclr").addEventListener("click", clearSelection);
+    }
+
+    function clearSelection() {
+      highlight(null);
+      el("gdetail").innerHTML = '<p class="dim">Click a file to see what you change at the same time.</p>';
+    }
+
     svg.addEventListener("click", function (ev) {
       var grp = ev.target.closest ? ev.target.closest("g.gn") : null;
-      if (!grp || grp.dataset.kind !== "file") return;
-      var label = grp.dataset.label;
-      if (!label || label === graphSeed) return;
-      graphSeed = label;
-      graphDepth = 2;
-      show("graph");
+      if (!grp) { clearSelection(); return; }
+      if (grp.dataset.kind !== "file") return;
+      selectNode(+grp.dataset.i);
+    });
+  }
+
+  // --- folders as colour ----------------------------------------------------
+
+  // Grouped by folder, not by community detection. Louvain would spend ~150
+  // lines rediscovering a structure the paths already state outright, and name
+  // its clusters worse than the directory does.
+  var GROUP_COLOURS = [
+    "#5ac8a8", "#7aa2f7", "#e0af68", "#bb9af7", "#f7768e",
+    "#7dcfff", "#9ece6a", "#ff9e64", "#c0caf5"
+  ];
+
+  function groupColour(g) {
+    if (g == null) return "var(--muted)";
+    return GROUP_COLOURS[g % GROUP_COLOURS.length];
+  }
+
+  function folderDir(path) {
+    var parts = String(path).split(/[\/\\]/).filter(Boolean);
+    if (parts.length <= 1) return "(root)";
+    return parts.slice(0, Math.min(2, parts.length - 1)).join("/");
+  }
+
+  // Assigns n.group in place and returns the ordered groups.
+  //
+  // Only file nodes. A memory node's label is a ULID with no path separator,
+  // so it would land in a bogus group and could end up naming one.
+  function folderGroups(nodes) {
+    var counts = {};
+    nodes.forEach(function (n) {
+      if (n.kind !== "file") return;
+      var d = folderDir(n.label);
+      counts[d] = (counts[d] || 0) + 1;
+    });
+
+    var ordered = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; });
+    var top = ordered.slice(0, GROUP_COLOURS.length - 1);
+    var index = {};
+    top.forEach(function (d, i) { index[d] = i; });
+
+    var otherCount = 0;
+    nodes.forEach(function (n) {
+      if (n.kind !== "file") { n.group = null; return; }
+      var d = folderDir(n.label);
+      if (index[d] === undefined) { n.group = GROUP_COLOURS.length - 1; otherCount++; }
+      else n.group = index[d];
+    });
+
+    var out = top.map(function (d, i) { return { name: d, count: counts[d], g: i }; });
+    if (otherCount) {
+      out.push({ name: "everything else", count: otherCount, g: GROUP_COLOURS.length - 1, other: true });
+    }
+    return out;
+  }
+
+  var graphHighlight = null;
+  var legendActive = null;
+
+  function renderLegend(groups, nodes) {
+    var box = el("glegend");
+    if (!box) return;
+    var mem = nodes.filter(function (n) { return n.kind !== "file"; }).length;
+
+    box.innerHTML = '<div class="card"><h3>Folders in this project</h3><div class="legend">' +
+      groups.map(function (gr) {
+        return '<button class="lg" data-g="' + gr.g + '"' +
+          (gr.other ? ' title="' + num(gr.count) + ' files in folders too small to colour separately."' : "") +
+          '><span class="gk" style="background:' + groupColour(gr.g) + '"></span>' +
+          esc(gr.name) + ' <span class="dim">' + num(gr.count) + "</span></button>";
+      }).join("") +
+      (mem ? '<span class="lg"><span class="gk" style="background:var(--muted)"></span>memory <span class="dim">' +
+        num(mem) + "</span></span>" : "") +
+      '</div><p class="dim" style="margin-top:8px">Click a folder to see only its files. ' +
+      "Click it again to bring the rest back.</p></div>";
+
+    Array.prototype.forEach.call(box.querySelectorAll("button.lg"), function (b) {
+      b.addEventListener("click", function () {
+        var g = +b.dataset.g;
+        if (!graphHighlight) return;
+        if (legendActive === g) { legendActive = null; graphHighlight(null); }
+        else {
+          legendActive = g;
+          var keep = {};
+          nodes.forEach(function (n, i) { if (n.group === g) keep[i] = true; });
+          graphHighlight(keep);
+        }
+        Array.prototype.forEach.call(box.querySelectorAll("button.lg"), function (x) {
+          x.classList.toggle("on", legendActive !== null && +x.dataset.g === legendActive);
+        });
+      });
     });
   }
 
   function show(name) {
+    if (!views[name]) name = "projects";
     tab = name;
+    // Persisted, because this user reloads all day and being dropped back on
+    // the landing tab every time is a small tax paid dozens of times.
+    localStorage.setItem("dkm_tab", name);
     Array.prototype.forEach.call(document.querySelectorAll("nav button"), function (b) {
       b.setAttribute("aria-selected", String(b.dataset.tab === name));
     });
-    el("searchrow").hidden = name !== "search";
     showError(null);
     render("");
     views[name]().catch(showError);
   }
+
+  // Tabs that must not be redrawn by a background event.
+  //
+  // Redrawing the graph re-runs the force layout, so the picture moves under
+  // the cursor and any selection is lost. Redrawing Compose erases the
+  // description mid-sentence: one agent saving one memory would wipe it.
+  var noAutoRefresh = { graph: true, compose: true };
 
   function connectEvents() {
     if (es) es.close();
@@ -962,16 +1354,9 @@
             // Any change refreshes the current view. The payload is not trusted
             // to patch the DOM; it only signals that a refetch is worthwhile.
             //
-            // Graph and Compose are exempt. A refresh replaces the whole panel:
-            // for the graph that re-runs the force layout so the picture moves
-            // under the cursor, and for Compose it erases the description
-            // mid-sentence — a background agent saving one memory would wipe
-            // what the user was typing. Neither changes without an explicit
-            // action anyway.
-            if (views[tab] && tab !== "graph" && tab !== "compose") {
-              views[tab]().catch(function () {});
-            }
-            loadStats();
+            // Debounced: an import or a drain emits events far faster than a
+            // person reads, and refetching per frame makes the page thrash.
+            scheduleRefresh();
           });
           return pump();
         });
@@ -979,38 +1364,80 @@
       return pump();
     }).catch(function () {
       el("dot").className = "dot down";
-      el("livetext").textContent = "reconnecting";
+      // "reconnecting" reads as an error when the usual cause is that dkm was
+      // restarted deliberately.
+      el("livetext").textContent = "not connected — retrying";
       setTimeout(connectEvents, 4000);
     });
     es = { close: function () { ctrl.abort(); } };
+  }
+
+  var refreshTimer = null;
+  function scheduleRefresh() {
+    if (refreshTimer) return;
+    refreshTimer = setTimeout(function () {
+      refreshTimer = null;
+      if (views[tab] && !noAutoRefresh[tab]) views[tab]().catch(function () {});
+      loadStats();
+    }, 800);
   }
 
   function start() {
     el("gate").hidden = true;
     el("app").hidden = false;
     loadStats();
-    show("memories");
+    show(localStorage.getItem("dkm_tab") || "projects");
     connectEvents();
   }
 
   Array.prototype.forEach.call(document.querySelectorAll("nav button"), function (b) {
     b.addEventListener("click", function () { show(b.dataset.tab); });
   });
-  el("go").addEventListener("click", function () { show("search"); });
-  el("q").addEventListener("keydown", function (e) { if (e.key === "Enter") show("search"); });
 
   el("connect").addEventListener("click", function () {
     key = el("key").value.trim();
-    if (!key) return;
+    if (!key) { gateError("Paste the key first."); return; }
     api("/v1/healthz").then(function () {
       sessionStorage.setItem("dkm_key", key);
+      gateError("");
       start();
     }).catch(function (e) {
       el("gate").hidden = false;
       el("app").hidden = true;
-      alert(e.message);
+      // Inline, and the three cases told apart. An alert() box says the same
+      // thing for a typo, a dead server and a key that works but cannot do
+      // what was asked -- three different fixes.
+      var m = String(e.message || "");
+      if (/401|403|unauthor|forbidden|invalid/i.test(m)) {
+        gateError("Key refused. Check you copied the whole line, including pmk_.");
+      } else if (/fetch|network|unreachable|failed/i.test(m)) {
+        gateError("Cannot reach the server at " + location.origin + ". Is dkm serve still running?");
+      } else {
+        gateError(m);
+      }
     });
   });
+
+  function gateError(msg) {
+    var box = el("gateerr");
+    if (!box) return;
+    box.textContent = msg;
+    box.hidden = !msg;
+  }
+
+  if (el("keycopy")) {
+    el("keycopy").addEventListener("click", function () {
+      var t = el("keycmd").textContent;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(t).then(function () {
+          el("keycopy").textContent = "Copied";
+          setTimeout(function () { el("keycopy").textContent = "Copy"; }, 1400);
+        }).catch(function () { selectText(el("keycmd")); });
+      } else {
+        selectText(el("keycmd"));
+      }
+    });
+  }
   el("key").addEventListener("keydown", function (e) {
     if (e.key === "Enter") el("connect").click();
   });
