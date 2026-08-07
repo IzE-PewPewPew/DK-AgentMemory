@@ -11,11 +11,25 @@
     --bg: #fbfbfa; --panel: #fff; --line: #e4e4e2; --ink: #1a1a19;
     --muted: #6b6b66; --accent: #2f6f4e; --warn: #9a4b23;
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+    /* Folder colours for the map, as variables so they follow the theme.
+       They were previously a fixed dark-theme palette in JavaScript, which
+       meant the default light theme drew the largest folder group at about
+       1.3:1 against the page -- the long tail of a 750-file project was
+       effectively invisible unless the operating system happened to be set
+       to dark mode. These are the light values; the dark block overrides. */
+    --g0: #0f766e; --g1: #1d4ed8; --g2: #b45309;
+    --g3: #7c3aed; --g4: #be123c; --g5: #0e7490;
+    --g6: #4d7c0f; --g7: #c2410c; --g8: #52525b;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #16171a; --panel: #1d1f23; --line: #2e3138; --ink: #e8e8e6;
       --muted: #9a9a94; --accent: #7fc39b; --warn: #e0a06a;
+
+      --g0: #5ac8a8; --g1: #7aa2f7; --g2: #e0af68;
+      --g3: #bb9af7; --g4: #f7768e; --g5: #7dcfff;
+      --g6: #9ece6a; --g7: #ff9e64; --g8: #a9b1d6;
     }
   }
   * { box-sizing: border-box; }
@@ -1280,10 +1294,37 @@
     // than a refetch and a fresh 300-iteration layout. Re-running the physics
     // on click moved the whole picture under the cursor and lost the node the
     // user had just decided to look at.
-    var adj = {};
+    //
+    // Kept per relation, not merged. The server writes three, and they answer
+    // different questions: co_edited means you changed both inside one
+    // session, co_occurs means one stored note names both, touches links a
+    // memory to a file. Summing them reported one number that meant neither
+    // thing, and double-counted the pairs carrying two relations.
+    var adj = { all: {} };
     links.forEach(function (l) {
-      (adj[l.s] = adj[l.s] || []).push({ i: l.t, w: l.w });
-      (adj[l.t] = adj[l.t] || []).push({ i: l.s, w: l.w });
+      // Bucket created on demand, never defaulted. Falling back to co_edited
+      // for an unrecognised relation put `touches` edges -- memory-to-file --
+      // into the co-editing table, so a raw ULID appeared in a list of files
+      // the user supposedly changed together.
+      var bucket = adj[l.rel] = adj[l.rel] || {};
+      (bucket[l.s] = bucket[l.s] || []).push({ i: l.t, w: l.w });
+      (bucket[l.t] = bucket[l.t] || []).push({ i: l.s, w: l.w });
+      // `all` is what the highlight pass dims against: every link is a real
+      // relation and hiding one kind would make the picture lie.
+      (adj.all[l.s] = adj.all[l.s] || []).push({ i: l.t, w: l.w });
+      (adj.all[l.t] = adj.all[l.t] || []).push({ i: l.s, w: l.w });
+    });
+
+    // Memories that name each file, from the touches edges the server already
+    // writes. This is the thing a syntax-tree tool cannot show: not what the
+    // code imports, but what you concluded about it.
+    var memOf = {};
+    links.forEach(function (l) {
+      if (l.rel !== "touches") return;
+      var m = nodes[l.s].kind === "memory" ? l.s : (nodes[l.t].kind === "memory" ? l.t : -1);
+      var f = m === l.s ? l.t : l.s;
+      if (m < 0 || nodes[f].kind !== "file") return;
+      (memOf[f] = memOf[f] || []).push(m);
     });
 
     var groupEls = svg.querySelectorAll("g.gn");
@@ -1301,33 +1342,61 @@
     }
     graphHighlight = highlight;
 
-    function selectNode(i) {
-      var n = nodes[i];
-      var nbrs = (adj[i] || []).slice().sort(function (a, b) { return b.w - a.w; });
-
-      var keep = {};
-      keep[i] = true;
-      nbrs.forEach(function (x) { keep[x.i] = true; });
-      highlight(keep);
-
-      var rows = nbrs.slice(0, 12).map(function (x) {
+    function relTable(list, heading) {
+      if (!list || !list.length) return "";
+      var rows = list.slice(0, 10).map(function (x) {
         return '<tr><td><a href="#" class="nbr" data-i="' + x.i + '">' +
           esc(shortPath(nodes[x.i].label)) + "</a></td><td>" + num(x.w) + "</td></tr>";
       }).join("");
+      return '<div class="scroll"><table><thead><tr><th>' + heading +
+        "</th><th></th></tr></thead><tbody>" + rows + "</tbody></table></div>" +
+        (list.length > 10 ? '<p class="dim">…and ' + num(list.length - 10) + " more</p>" : "");
+    }
+
+    function selectNode(i) {
+      var n = nodes[i];
+      var byW = function (a, b) { return b.w - a.w; };
+      // Files only. A neighbour list is about files; memory nodes reach these
+      // tables through `touches` and belong under "what you wrote" instead.
+      var onlyFiles = function (x) { return nodes[x.i] && nodes[x.i].kind === "file"; };
+      var edited = ((adj.co_edited || {})[i] || []).filter(onlyFiles).sort(byW);
+      var noted = ((adj.co_occurs || {})[i] || []).filter(onlyFiles).sort(byW);
+      var mems = memOf[i] || [];
+
+      var keep = {};
+      keep[i] = true;
+      (adj.all[i] || []).forEach(function (x) { keep[x.i] = true; });
+      highlight(keep);
+
+      var body = "";
+      if (edited.length) {
+        body += "<p>You change this at the same time as <b>" + num(edited.length) +
+          "</b> other files.</p>" + relTable(edited, "Changed together");
+      }
+      if (noted.length) {
+        // A separate relation with a separate meaning: these came from a
+        // stored memory naming both files, not from an edit.
+        body += "<p><b>" + num(noted.length) + "</b> other files are named in the " +
+          "same notes as this one.</p>" + relTable(noted, "Mentioned together");
+      }
+      if (mems.length) {
+        body += '<p style="margin-top:11px">What you wrote about this file</p><div class="meta">' +
+          mems.map(function (m) {
+            return '<span class="tag lesson">' + esc(shortPath(nodes[m].label)) + "</span>";
+          }).join("") + "</div>";
+      }
+      if (!body) {
+        body = "<p>You have never changed this file at the same time as another file.</p>";
+      } else {
+        body += '<div class="row" style="margin-top:10px">' +
+          '<button id="gonly">Show only these</button><button id="gclr">Clear</button></div>' +
+          '<p class="dim" style="margin-top:7px">"Show only these" redraws the map with just ' +
+          "this file and the files linked to it.</p>";
+      }
 
       el("gdetail").innerHTML =
         "<h3>" + esc(shortPath(n.label)) + "</h3>" +
-        '<p class="dim" style="overflow-wrap:anywhere">' + esc(n.label) + "</p>" +
-        (nbrs.length
-          ? "<p>You change this at the same time as <b>" + num(nbrs.length) + "</b> other files.</p>" +
-            '<div class="scroll"><table><thead><tr><th>Files you change at the same time</th><th></th></tr></thead><tbody>' +
-            rows + "</tbody></table></div>" +
-            (nbrs.length > 12 ? '<p class="dim">…and ' + num(nbrs.length - 12) + " more</p>" : "") +
-            '<div class="row" style="margin-top:10px">' +
-            '<button id="gonly">Show only these</button><button id="gclr">Clear</button></div>' +
-            '<p class="dim" style="margin-top:7px">"Show only these" redraws the map with just ' +
-            "this file and the files linked to it.</p>"
-          : "<p>You have never changed this file at the same time as another file.</p>");
+        '<p class="dim" style="overflow-wrap:anywhere">' + esc(n.label) + "</p>" + body;
 
       Array.prototype.forEach.call(el("gdetail").querySelectorAll("a.nbr"), function (a) {
         a.addEventListener("click", function (ev) { ev.preventDefault(); selectNode(+a.dataset.i); });
@@ -1493,14 +1562,13 @@
   // Grouped by folder, not by community detection. Louvain would spend ~150
   // lines rediscovering a structure the paths already state outright, and name
   // its clusters worse than the directory does.
-  var GROUP_COLOURS = [
-    "#5ac8a8", "#7aa2f7", "#e0af68", "#bb9af7", "#f7768e",
-    "#7dcfff", "#9ece6a", "#ff9e64", "#c0caf5"
-  ];
+  // Nine slots, resolved from CSS so the palette follows the theme rather than
+  // being frozen at one scheme's values in JavaScript.
+  var GROUP_SLOTS = 9;
 
   function groupColour(g) {
     if (g == null) return "var(--muted)";
-    return GROUP_COLOURS[g % GROUP_COLOURS.length];
+    return "var(--g" + (g % GROUP_SLOTS) + ")";
   }
 
   function folderDir(path) {
@@ -1522,7 +1590,7 @@
     });
 
     var ordered = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; });
-    var top = ordered.slice(0, GROUP_COLOURS.length - 1);
+    var top = ordered.slice(0, GROUP_SLOTS - 1);
     var index = {};
     top.forEach(function (d, i) { index[d] = i; });
 
@@ -1530,13 +1598,13 @@
     nodes.forEach(function (n) {
       if (n.kind !== "file") { n.group = null; return; }
       var d = folderDir(n.label);
-      if (index[d] === undefined) { n.group = GROUP_COLOURS.length - 1; otherCount++; }
+      if (index[d] === undefined) { n.group = GROUP_SLOTS - 1; otherCount++; }
       else n.group = index[d];
     });
 
     var out = top.map(function (d, i) { return { name: d, count: counts[d], g: i }; });
     if (otherCount) {
-      out.push({ name: "everything else", count: otherCount, g: GROUP_COLOURS.length - 1, other: true });
+      out.push({ name: "everything else", count: otherCount, g: GROUP_SLOTS - 1, other: true });
     }
     return out;
   }
